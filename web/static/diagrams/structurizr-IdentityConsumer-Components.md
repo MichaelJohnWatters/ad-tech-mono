@@ -9,20 +9,20 @@ graph LR
       style 9 fill:#ffffff,stroke:#0b4884,color:#0b4884
 
       subgraph 100 ["Identity Consumer"]
-        style 100 fill:#ffffff,stroke:#0b4884,color:#0b4884
+        style 100 fill:#ffffff,stroke:#9e20ae,color:#9e20ae
 
         101["<div style='font-weight: bold'>NATS Subscription</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Consumes<br />adtech.identity.observed<br />(queue-grouped), decodes<br />ObservedEvent, acks/naks.<br />(cmd/identity-consumer/main.go)</div>"]
-        style 101 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 101 fill:#c026d3,stroke:#9e20ae,color:#ffffff
         102["<div style='font-weight: bold'>Observer + Batcher</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Buffers observations, dedupes<br />via seen-set, batches by<br />interval/size, applies<br />linking rules.<br />(pkg/identityobserve/observe.go)</div>"]
-        style 102 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 102 fill:#c026d3,stroke:#9e20ae,color:#ffffff
         103["<div style='font-weight: bold'>Deterministic Edge Builder</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Edges for 2+ identifiers<br />co-observed on one request<br />(confidence 1.0).<br />(pkg/identityobserve/observe.go)</div>"]
-        style 103 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 103 fill:#c026d3,stroke:#9e20ae,color:#ffffff
         104["<div style='font-weight: bold'>Probabilistic Matcher</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>IP+UA fingerprint bucketing<br />for same-device heuristic<br />links (skips shared IPs).<br />(pkg/identityobserve/observe.go)</div>"]
-        style 104 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 104 fill:#c026d3,stroke:#9e20ae,color:#ffffff
         105["<div style='font-weight: bold'>Fingerprint Bucket Store</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Redis sets of ids per<br />fingerprint (TTL); in-memory<br />fallback (single-replica).<br />(cmd/identity-consumer/redisfp.go)</div>"]
-        style 105 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 105 fill:#c026d3,stroke:#9e20ae,color:#ffffff
         106["<div style='font-weight: bold'>Edge Writer</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Batched idempotent upserts to<br />identity_graph.<br />(pkg/store/postgres/identity.go)</div>"]
-        style 106 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 106 fill:#c026d3,stroke:#9e20ae,color:#ffffff
       end
 
       145[("<div style='font-weight: bold'>PostgreSQL</div><div style='font-size: 70%; margin-top: 0px'>[Container: PostgreSQL]</div><div style='font-size: 80%; margin-top:10px'>Transactional store,<br />multi-tenant via RLS<br />(adtech_app NOBYPASSRLS).</div>")]

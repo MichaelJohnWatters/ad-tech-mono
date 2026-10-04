@@ -14,22 +14,22 @@ graph LR
       style 9 fill:#ffffff,stroke:#0b4884,color:#0b4884
 
       subgraph 10 ["Gateway"]
-        style 10 fill:#ffffff,stroke:#0b4884,color:#0b4884
+        style 10 fill:#ffffff,stroke:#0b7268,color:#0b7268
 
         11["<div style='font-weight: bold'>JWT / API-Key Auth</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Validates Bearer JWT /<br />session cookie / API key;<br />strips then re-injects<br />identity headers.<br />(pkg/middleware/auth.go,<br />api_key.go)</div>"]
-        style 11 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 11 fill:#0d9488,stroke:#0b7268,color:#ffffff
         12["<div style='font-weight: bold'>OIDC SSO Handler</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Per-account auth-code + PKCE<br />flow, id_token verify, JIT<br />least-privilege provisioning.<br />(cmd/gateway/sso.go,<br />pkg/ssoauth)</div>"]
-        style 12 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 12 fill:#0d9488,stroke:#0b7268,color:#ffffff
         13["<div style='font-weight: bold'>RBAC Authorizer</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Enforces resource:action<br />permissions + account-type;<br />method-aware gates; agency<br />act-as. (pkg/auth,<br />pkg/middleware)</div>"]
-        style 13 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 13 fill:#0d9488,stroke:#0b7268,color:#ffffff
         14["<div style='font-weight: bold'>Session Manager</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>httpOnly JWT cookie + Redis<br />iat-checkpoint revocation<br />(logout-everywhere).<br />(cmd/gateway/auth_login.go,<br />pkg/middleware/revocation.go)</div>"]
-        style 14 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 14 fill:#0d9488,stroke:#0b7268,color:#ffffff
         15["<div style='font-weight: bold'>HTMX Portal</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Renders the<br />advertiser/publisher/staff/partner<br />portals with<br />permission-filtered nav.<br />(cmd/gateway/portal.go)</div>"]
-        style 15 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 15 fill:#0d9488,stroke:#0b7268,color:#ffffff
         16["<div style='font-weight: bold'>REST API Handlers</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Tenant-scoped CRUD<br />(campaigns/creatives/placements/audiences/reports/billing/webhooks…).<br />(cmd/gateway/*.go)</div>"]
-        style 16 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 16 fill:#0d9488,stroke:#0b7268,color:#ffffff
         17["<div style='font-weight: bold'>Reverse Proxy</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Strips prefix, injects<br />X-Account/User from claims,<br />forwards to<br />dsp/ssp/adserver/reporting.<br />(pkg/middleware/proxy.go)</div>"]
-        style 17 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 17 fill:#0d9488,stroke:#0b7268,color:#ffffff
       end
 
       145[("<div style='font-weight: bold'>PostgreSQL</div><div style='font-size: 70%; margin-top: 0px'>[Container: PostgreSQL]</div><div style='font-size: 80%; margin-top:10px'>Transactional store,<br />multi-tenant via RLS<br />(adtech_app NOBYPASSRLS).</div>")]
@@ -37,13 +37,13 @@ graph LR
       146[("<div style='font-weight: bold'>Redis</div><div style='font-size: 70%; margin-top: 0px'>[Container: Redis]</div><div style='font-size: 80%; margin-top:10px'>L2: budget/freq-cap counters,<br />audience sets, sessions, rate<br />limits.</div>")]
       style 146 fill:#438dd5,stroke:#2e6295,color:#ffffff
       18["<div style='font-weight: bold'>SSP</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Supply-side: publisher<br />inventory, builds bid<br />requests, resolves + stamps<br />audience segments<br />(consent-gated).</div>"]
-      style 18 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 18 fill:#2563eb,stroke:#1e4fc2,color:#ffffff
       36["<div style='font-weight: bold'>DSP</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Demand-side: campaign<br />eligibility, targeting,<br />bidding, budget/pacing, bid<br />shading.</div>"]
-      style 36 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 36 fill:#7c3aed,stroke:#6530c4,color:#ffffff
       44["<div style='font-weight: bold'>Ad Server</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Creative decisioning +<br />serving, frequency capping,<br />HMAC-signed tracking macros.</div>"]
-      style 44 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 44 fill:#16a34a,stroke:#12863d,color:#ffffff
       85["<div style='font-weight: bold'>Reporting + Billing</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Consumes NATS events →<br />ClickHouse; query API;<br />in-process billing engine<br />(reserve/settle,<br />TigerBeetle); hourly Parquet<br />export.</div>"]
-      style 85 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 85 fill:#4f46e5,stroke:#413abd,color:#ffffff
     end
 
     85-. "<div>Invoices, balances, committed<br />spend</div><div style='font-size: 70%'></div>" .->145

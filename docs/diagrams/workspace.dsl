@@ -17,160 +17,177 @@ workspace "Ad Tech Mono" "C4 model of the full-stack programmatic advertising pl
     adtech = softwareSystem "Ad Tech Platform" "Programmatic advertising platform — SSP, exchange, DSP, ad servers, data + money pipelines." {
 
       gateway = container "Gateway" "Auth (JWT/SSO/API-key), RBAC, HTMX portals, REST API, proxy to internal gRPC." "Go" {
-        gw_authJwt       = component "JWT / API-Key Auth" "Validates Bearer JWT / session cookie / API key; strips then re-injects identity headers. (pkg/middleware/auth.go, api_key.go)" "Go"
-        gw_ssoHandler    = component "OIDC SSO Handler" "Per-account auth-code + PKCE flow, id_token verify, JIT least-privilege provisioning. (cmd/gateway/sso.go, pkg/ssoauth)" "Go"
-        gw_rbacAuthz     = component "RBAC Authorizer" "Enforces resource:action permissions + account-type; method-aware gates; agency act-as. (pkg/auth, pkg/middleware)" "Go"
-        gw_sessionMgr    = component "Session Manager" "httpOnly JWT cookie + Redis iat-checkpoint revocation (logout-everywhere). (cmd/gateway/auth_login.go, pkg/middleware/revocation.go)" "Go"
-        gw_portalRender  = component "HTMX Portal" "Renders the advertiser/publisher/staff/partner portals with permission-filtered nav. (cmd/gateway/portal.go)" "Go"
-        gw_restHandlers  = component "REST API Handlers" "Tenant-scoped CRUD (campaigns/creatives/placements/audiences/reports/billing/webhooks…). (cmd/gateway/*.go)" "Go"
-        gw_reverseProxy  = component "Reverse Proxy" "Strips prefix, injects X-Account/User from claims, forwards to dsp/ssp/adserver/reporting. (pkg/middleware/proxy.go)" "Go"
+        tags "svc:gateway"
+        gw_authJwt       = component "JWT / API-Key Auth" "Validates Bearer JWT / session cookie / API key; strips then re-injects identity headers. (pkg/middleware/auth.go, api_key.go)" "Go" "svc:gateway"
+        gw_ssoHandler    = component "OIDC SSO Handler" "Per-account auth-code + PKCE flow, id_token verify, JIT least-privilege provisioning. (cmd/gateway/sso.go, pkg/ssoauth)" "Go" "svc:gateway"
+        gw_rbacAuthz     = component "RBAC Authorizer" "Enforces resource:action permissions + account-type; method-aware gates; agency act-as. (pkg/auth, pkg/middleware)" "Go" "svc:gateway"
+        gw_sessionMgr    = component "Session Manager" "httpOnly JWT cookie + Redis iat-checkpoint revocation (logout-everywhere). (cmd/gateway/auth_login.go, pkg/middleware/revocation.go)" "Go" "svc:gateway"
+        gw_portalRender  = component "HTMX Portal" "Renders the advertiser/publisher/staff/partner portals with permission-filtered nav. (cmd/gateway/portal.go)" "Go" "svc:gateway"
+        gw_restHandlers  = component "REST API Handlers" "Tenant-scoped CRUD (campaigns/creatives/placements/audiences/reports/billing/webhooks…). (cmd/gateway/*.go)" "Go" "svc:gateway"
+        gw_reverseProxy  = component "Reverse Proxy" "Strips prefix, injects X-Account/User from claims, forwards to dsp/ssp/adserver/reporting. (pkg/middleware/proxy.go)" "Go" "svc:gateway"
       }
 
       # --- Serving hot path ---
       ssp         = container "SSP" "Supply-side: publisher inventory, builds bid requests, resolves + stamps audience segments (consent-gated)." "Go" {
-        ssp_requestHandler  = component "Request Handler" "Serves /v1/ssp/request: builds the OpenRTB bid request, orchestrates resolution → auction → render. (cmd/ssp/main.go)" "Go"
-        ssp_segmentResolver = component "Segment Resolver" "Resolves the user's PUBLIC audience segments + IAB segtax labels and stamps user.ext.segments/data (the sell-side enrichment DSPs bid against). (pkg/audience)" "Go"
-        ssp_consentGate     = component "Consent Gate" "privacy.Evaluate — GDPR/TCF/US-Privacy/GPP; gates segment stamping, identity observe, personalisation. (pkg/privacy)" "Go"
-        ssp_floorEngine     = component "Floor Engine" "Floor price by static/time/device/geo rules." "Go"
-        ssp_quality         = component "Quality Controls" "Publisher blocklists / allowlists / category filters." "Go"
-        ssp_placementCache  = component "Placement Cache" "L1 warm cache of publishers, placements, floors, deals. (pkg/cache)" "Go"
-        ssp_exchangeClient  = component "Exchange Client" "gRPC twin client — RunAuction (grpc:// else OpenRTB HTTP). (pkg/grpcx)" "Go"
-        ssp_adserverClient  = component "Ad Server Client" "gRPC twin client — render the winning creative." "Go"
+        tags "svc:ssp"
+        ssp_requestHandler  = component "Request Handler" "Serves /v1/ssp/request: builds the OpenRTB bid request, orchestrates resolution → auction → render. (cmd/ssp/main.go)" "Go" "svc:ssp"
+        ssp_segmentResolver = component "Segment Resolver" "Resolves the user's PUBLIC audience segments + IAB segtax labels and stamps user.ext.segments/data (the sell-side enrichment DSPs bid against). (pkg/audience)" "Go" "svc:ssp"
+        ssp_consentGate     = component "Consent Gate" "privacy.Evaluate — GDPR/TCF/US-Privacy/GPP; gates segment stamping, identity observe, personalisation. (pkg/privacy)" "Go" "svc:ssp"
+        ssp_floorEngine     = component "Floor Engine" "Floor price by static/time/device/geo rules." "Go" "svc:ssp"
+        ssp_quality         = component "Quality Controls" "Publisher blocklists / allowlists / category filters." "Go" "svc:ssp"
+        ssp_placementCache  = component "Placement Cache" "L1 warm cache of publishers, placements, floors, deals. (pkg/cache)" "Go" "svc:ssp"
+        ssp_exchangeClient  = component "Exchange Client" "gRPC twin client — RunAuction (grpc:// else OpenRTB HTTP). (pkg/grpcx)" "Go" "svc:ssp"
+        ssp_adserverClient  = component "Ad Server Client" "gRPC twin client — render the winning creative." "Go" "svc:ssp"
       }
       exchange    = container "Exchange" "Runs the auction, DSP fan-out, deal priority (PG>Preferred>PMP>Open), win/loss notices (price + clear_price)." "Go" {
-        exch_auctionHandler = component "Auction Handler" "RunAuction (gRPC twin + /v1/openrtb/auction HTTP): orchestrates deals → fan-out → auction → notices. (cmd/exchange/main.go)" "Go"
-        exch_partnerAuth    = component "Partner Inbound Auth" "Gates the EXTERNAL OpenRTB surface on per-partner API keys (warn|strict). (middleware)" "Go"
-        exch_adstxt         = component "ads.txt Verifier" "Validates seller authorisation before accepting a request (off|warn|strict). (pkg/fraud/adstxt)" "Go"
-        exch_dealMatcher    = component "Deal Matcher" "Match + priority PG>Preferred>PMP>Open; PG preempts, Preferred/PMP set the floor. (pkg/deals)" "Go"
-        exch_router         = component "SmartRouter" "Fan-out routing — skip slow/deadbeat DSP legs, ε-probe, warm-start from dsp_calls. (pkg/auction/router.go)" "Go"
-        exch_auctionEngine  = component "Auction Engine" "First-price (default) + clearing/second-price signal. (pkg/auction)" "Go"
-        exch_winLossNotify  = component "Win/Loss Notifier" "sendWinLossNotifications — win/loss nurls carrying price + clear_price (minToWin). (cmd/exchange/main.go)" "Go"
-        exch_warmCache      = component "Warm Cache" "L1 DSP endpoints, floors, deals, ads.txt (Redis-backed)." "Go"
+        tags "svc:exchange"
+        exch_auctionHandler = component "Auction Handler" "RunAuction (gRPC twin + /v1/openrtb/auction HTTP): orchestrates deals → fan-out → auction → notices. (cmd/exchange/main.go)" "Go" "svc:exchange"
+        exch_partnerAuth    = component "Partner Inbound Auth" "Gates the EXTERNAL OpenRTB surface on per-partner API keys (warn|strict). (middleware)" "Go" "svc:exchange"
+        exch_adstxt         = component "ads.txt Verifier" "Validates seller authorisation before accepting a request (off|warn|strict). (pkg/fraud/adstxt)" "Go" "svc:exchange"
+        exch_dealMatcher    = component "Deal Matcher" "Match + priority PG>Preferred>PMP>Open; PG preempts, Preferred/PMP set the floor. (pkg/deals)" "Go" "svc:exchange"
+        exch_router         = component "SmartRouter" "Fan-out routing — skip slow/deadbeat DSP legs, ε-probe, warm-start from dsp_calls. (pkg/auction/router.go)" "Go" "svc:exchange"
+        exch_auctionEngine  = component "Auction Engine" "First-price (default) + clearing/second-price signal. (pkg/auction)" "Go" "svc:exchange"
+        exch_winLossNotify  = component "Win/Loss Notifier" "sendWinLossNotifications — win/loss nurls carrying price + clear_price (minToWin). (cmd/exchange/main.go)" "Go" "svc:exchange"
+        exch_warmCache      = component "Warm Cache" "L1 DSP endpoints, floors, deals, ads.txt (Redis-backed)." "Go" "svc:exchange"
       }
       dsp         = container "DSP" "Demand-side: campaign eligibility, targeting, bidding, budget/pacing, bid shading." "Go" {
-        bidHandler     = component "Bid Handler" "Per-request bid loop: iterate campaigns → eligibility → pace → shade → bid. (cmd/dsp/main.go)" "Go"
-        targeting      = component "Targeting Engine" "Boolean include/exclude expressions + stacked bid modifiers. (pkg/targeting)" "Go"
-        audienceLookup = component "Audience Lookup" "Segment membership via Redis sets + identity-graph expansion + household. (cmd/dsp/identity.go, pkg/audience)" "Go"
-        shading        = component "Bid Shading" "Win-rate curve per placement; shade toward the (second-price) clearing. (pkg/bidshading)" "Go"
-        warmCache      = component "Warm Cache / Refresher" "In-process L1 campaigns + budgets + balances, bulk-refreshed in background (no hot-path I/O). (cmd/dsp/refresh.go)" "Go"
-        budgetGate     = component "Budget + Balance Gate" "Spend meters + prepay gate; reconciles to billing snapshots. (cmd/dsp)" "Go"
-        winLoss        = component "Win/Loss Handler" "nurl handlers: budget record, publish AuctionLoss/AuctionShade, feed shading curve." "Go"
+        tags "svc:dsp"
+        bidHandler     = component "Bid Handler" "Per-request bid loop: iterate campaigns → eligibility → pace → shade → bid. (cmd/dsp/main.go)" "Go" "svc:dsp"
+        targeting      = component "Targeting Engine" "Boolean include/exclude expressions + stacked bid modifiers. (pkg/targeting)" "Go" "svc:dsp"
+        audienceLookup = component "Audience Lookup" "Segment membership via Redis sets + identity-graph expansion + household. (cmd/dsp/identity.go, pkg/audience)" "Go" "svc:dsp"
+        shading        = component "Bid Shading" "Win-rate curve per placement; shade toward the (second-price) clearing. (pkg/bidshading)" "Go" "svc:dsp"
+        warmCache      = component "Warm Cache / Refresher" "In-process L1 campaigns + budgets + balances, bulk-refreshed in background (no hot-path I/O). (cmd/dsp/refresh.go)" "Go" "svc:dsp"
+        budgetGate     = component "Budget + Balance Gate" "Spend meters + prepay gate; reconciles to billing snapshots. (cmd/dsp)" "Go" "svc:dsp"
+        winLoss        = component "Win/Loss Handler" "nurl handlers: budget record, publish AuctionLoss/AuctionShade, feed shading curve." "Go" "svc:dsp"
       }
       adserver    = container "Ad Server" "Creative decisioning + serving, frequency capping, HMAC-signed tracking macros." "Go" {
-        ad_serveHandler = component "Serve Handler" "HTTP /v1/ad/serve + gRPC InternalAdServeService.Serve: dispatches the decisioning → render pipeline. (cmd/adserver/main.go)" "Go"
-        ad_freqCap      = component "Frequency Cap Manager" "Redis-backed per-user + per-household campaign caps, atomic peek/record Lua (PEEK vs RECORD split). (cmd/adserver/freqcap.go)" "Go"
-        ad_resolver     = component "Creative Resolver" "Warm metadata cache + L1 body cache; loads approved creatives from Postgres, fetches bodies from S3 on miss. (cmd/adserver/creatives.go)" "Go"
-        ad_macroSig     = component "Macro Substitution + Signer" "Substitutes ${…} macros and builds HMAC-signed impression/click/viewability tracker URLs. (pkg/adserving/macros.go, signing.go)" "Go"
-        ad_dpa          = component "Dynamic Product Assembler" "Render-time assembly for format=dynamic_product: reads recent SKUs + catalog, runs the Go template, static {{else}} fallback. (cmd/adserver/dynamic_products.go)" "Go"
-        ad_bandit       = component "Creative Bandit" "In-memory Thompson-sampling creative rotation, warm-started from reporting's per-creative CTR histogram. (pkg/optimise/bandit.go)" "Go"
-        ad_warmCache    = component "Warm Cache Supervisor" "Creative-metadata + freq-cap-rule warm caches: NATS-invalidate + poll + self-healing Postgres loader. (pkg/cache/warm)" "Go"
-        ad_eventsPub    = component "Event Publisher" "Async NATS publish of render_failed + freq_cap_blocked (disk-spool fallback). (cmd/adserver/main.go, pkg/events)" "Go"
+        tags "svc:adserver"
+        ad_serveHandler = component "Serve Handler" "HTTP /v1/ad/serve + gRPC InternalAdServeService.Serve: dispatches the decisioning → render pipeline. (cmd/adserver/main.go)" "Go" "svc:adserver"
+        ad_freqCap      = component "Frequency Cap Manager" "Redis-backed per-user + per-household campaign caps, atomic peek/record Lua (PEEK vs RECORD split). (cmd/adserver/freqcap.go)" "Go" "svc:adserver"
+        ad_resolver     = component "Creative Resolver" "Warm metadata cache + L1 body cache; loads approved creatives from Postgres, fetches bodies from S3 on miss. (cmd/adserver/creatives.go)" "Go" "svc:adserver"
+        ad_macroSig     = component "Macro Substitution + Signer" "Substitutes ${…} macros and builds HMAC-signed impression/click/viewability tracker URLs. (pkg/adserving/macros.go, signing.go)" "Go" "svc:adserver"
+        ad_dpa          = component "Dynamic Product Assembler" "Render-time assembly for format=dynamic_product: reads recent SKUs + catalog, runs the Go template, static {{else}} fallback. (cmd/adserver/dynamic_products.go)" "Go" "svc:adserver"
+        ad_bandit       = component "Creative Bandit" "In-memory Thompson-sampling creative rotation, warm-started from reporting's per-creative CTR histogram. (pkg/optimise/bandit.go)" "Go" "svc:adserver"
+        ad_warmCache    = component "Warm Cache Supervisor" "Creative-metadata + freq-cap-rule warm caches: NATS-invalidate + poll + self-healing Postgres loader. (pkg/cache/warm)" "Go" "svc:adserver"
+        ad_eventsPub    = component "Event Publisher" "Async NATS publish of render_failed + freq_cap_blocked (disk-spool fallback). (cmd/adserver/main.go, pkg/events)" "Go" "svc:adserver"
       }
       pubAdserver = container "Publisher Ad Server" "Direct-sold vs programmatic arbitration per slot (GAM-like) + Prebid fan-out + guaranteed pacing." "Go" {
-        pub_serveOrchestrator = component "Serve Orchestrator" "HTTP serve handler: runs arbitration → direct serve or programmatic fan-out, renders the winner per format. (cmd/publisher-adserver/main.go)" "Go"
-        pub_arbitration       = component "Arbitration Engine" "Picks direct-sold vs programmatic per slot on the priority ladder sponsorship>guaranteed>house. (pkg/publisheradserver/arbitration)" "Go"
-        pub_directMatcher     = component "Direct-Sold Line-Item Matcher" "Warm-cached publisher line items filtered by status / flight window / placement. (pkg/publisheradserver, cmd/publisher-adserver)" "Go"
-        pub_pacing            = component "Delivery Pacing Manager" "Redis per-line-item impression actuals; flags guaranteed items behind pace (PacingDecider). (pkg/publisheradserver/pacing)" "Go"
-        pub_prebidFanout      = component "Prebid Fan-Out Client" "Parallel OpenRTB requests to external Prebid Servers; selects the highest non-nobid bid. (pkg/publisheradserver/prebidclient)" "Go"
-        pub_sspClient         = component "SSP Demand Client" "Calls our SSP /v1/ssp/serve for the programmatic auction (exchange → DSPs), channel-aware. (cmd/publisher-adserver)" "Go"
-        pub_formatHandlers    = component "Format Handlers" "Renders the winner as VAST/VMAP (video), native JSON, audio VAST, or display HTML with signed tracker URLs. (cmd/publisher-adserver/vast.go, vmap.go, native.go, audio.go)" "Go"
-        pub_eventPub          = component "Event Publisher" "Publishes DirectWin / PrebidOutboundWin / ServeNoFill for analytics. (cmd/publisher-adserver, pkg/events)" "Go"
+        tags "svc:pubAdserver"
+        pub_serveOrchestrator = component "Serve Orchestrator" "HTTP serve handler: runs arbitration → direct serve or programmatic fan-out, renders the winner per format. (cmd/publisher-adserver/main.go)" "Go" "svc:pubAdserver"
+        pub_arbitration       = component "Arbitration Engine" "Picks direct-sold vs programmatic per slot on the priority ladder sponsorship>guaranteed>house. (pkg/publisheradserver/arbitration)" "Go" "svc:pubAdserver"
+        pub_directMatcher     = component "Direct-Sold Line-Item Matcher" "Warm-cached publisher line items filtered by status / flight window / placement. (pkg/publisheradserver, cmd/publisher-adserver)" "Go" "svc:pubAdserver"
+        pub_pacing            = component "Delivery Pacing Manager" "Redis per-line-item impression actuals; flags guaranteed items behind pace (PacingDecider). (pkg/publisheradserver/pacing)" "Go" "svc:pubAdserver"
+        pub_prebidFanout      = component "Prebid Fan-Out Client" "Parallel OpenRTB requests to external Prebid Servers; selects the highest non-nobid bid. (pkg/publisheradserver/prebidclient)" "Go" "svc:pubAdserver"
+        pub_sspClient         = component "SSP Demand Client" "Calls our SSP /v1/ssp/serve for the programmatic auction (exchange → DSPs), channel-aware. (cmd/publisher-adserver)" "Go" "svc:pubAdserver"
+        pub_formatHandlers    = component "Format Handlers" "Renders the winner as VAST/VMAP (video), native JSON, audio VAST, or display HTML with signed tracker URLs. (cmd/publisher-adserver/vast.go, vmap.go, native.go, audio.go)" "Go" "svc:pubAdserver"
+        pub_eventPub          = component "Event Publisher" "Publishes DirectWin / PrebidOutboundWin / ServeNoFill for analytics. (cmd/publisher-adserver, pkg/events)" "Go" "svc:pubAdserver"
       }
       tracker     = container "Tracker" "Impression/click/conversion/view beacons, real-time fraud checks, publishes events." "Go" {
-        trk_beacons     = component "Beacon Handlers" "/v1/t/imp|click|conv|view|video|audio: validate → fraud → dedup → publish; click 302-redirects. (cmd/tracker/main.go, mediagate.go)" "Go"
-        trk_hmacValidator = component "HMAC Validator" "Validates beacon URL signatures (SHA-256, key-rotation overlap, exp= TTL). (pkg/adserving/signing.go)" "Go"
-        trk_fraudScorer = component "Real-Time Fraud Checker" "Inline per-beacon checks: bot UA, datacenter IP, per-IP rate limit, DB blocklists. (pkg/fraud/realtime.go)" "Go"
-        trk_blocklistCache = component "Fraud Blocklist Cache" "Warm cache of fraud_blocklists; polls Postgres + NATS-invalidate, pushes IP/UA blocks into the scorer. (cmd/tracker/blocklist.go)" "Go"
-        trk_dedup       = component "Dedup Gate" "Redis SetNX on (event_type, trace_id); drops browser retry / double-tap replays. (cmd/tracker/dedup.go)" "Go"
-        trk_eventPub    = component "Event Publisher" "Publishes beacon events to NATS with stable Msg-Id; disk-spool fallback on NATS stall. (cmd/tracker/main.go, pkg/events)" "Go"
-        trk_retargetPixel = component "Retargeting Pixel + Identity Bridge" "/v1/t/rt site-visit pixel (consent-gated) + publishes first-party identity edges. (cmd/tracker/retargeting.go, main.go)" "Go"
-        trk_ara         = component "ARA Handler" "Privacy Sandbox Attribution Reporting API: source/trigger registration + report ingestion. (cmd/tracker/ara.go)" "Go"
+        tags "svc:tracker"
+        trk_beacons     = component "Beacon Handlers" "/v1/t/imp|click|conv|view|video|audio: validate → fraud → dedup → publish; click 302-redirects. (cmd/tracker/main.go, mediagate.go)" "Go" "svc:tracker"
+        trk_hmacValidator = component "HMAC Validator" "Validates beacon URL signatures (SHA-256, key-rotation overlap, exp= TTL). (pkg/adserving/signing.go)" "Go" "svc:tracker"
+        trk_fraudScorer = component "Real-Time Fraud Checker" "Inline per-beacon checks: bot UA, datacenter IP, per-IP rate limit, DB blocklists. (pkg/fraud/realtime.go)" "Go" "svc:tracker"
+        trk_blocklistCache = component "Fraud Blocklist Cache" "Warm cache of fraud_blocklists; polls Postgres + NATS-invalidate, pushes IP/UA blocks into the scorer. (cmd/tracker/blocklist.go)" "Go" "svc:tracker"
+        trk_dedup       = component "Dedup Gate" "Redis SetNX on (event_type, trace_id); drops browser retry / double-tap replays. (cmd/tracker/dedup.go)" "Go" "svc:tracker"
+        trk_eventPub    = component "Event Publisher" "Publishes beacon events to NATS with stable Msg-Id; disk-spool fallback on NATS stall. (cmd/tracker/main.go, pkg/events)" "Go" "svc:tracker"
+        trk_retargetPixel = component "Retargeting Pixel + Identity Bridge" "/v1/t/rt site-visit pixel (consent-gated) + publishes first-party identity edges. (cmd/tracker/retargeting.go, main.go)" "Go" "svc:tracker"
+        trk_ara         = component "ARA Handler" "Privacy Sandbox Attribution Reporting API: source/trigger registration + report ingestion. (cmd/tracker/ara.go)" "Go" "svc:tracker"
       }
       ssai        = container "SSAI Stitcher" "Server-side ad insertion into HLS/DASH manifests, signed segment beacons." "Go" {
-        ssai_manifestParser     = component "Manifest Parser" "Parses HLS playlists / DASH MPD, finds CUE-OUT/CUE-IN ad-break spans. (pkg/ssai)" "Go"
-        ssai_auctionCaller      = component "Auction Caller" "Runs a per-break auction via the SSP (cap_defer=1 PEEK); mints a distinct trace per pod ad. (cmd/ssai/main.go)" "Go"
-        ssai_stitcher           = component "Ad Stitcher" "Splices winning ad segments into breaks (fills→slate→content), handles ad-pod depth. (cmd/ssai/main.go)" "Go"
-        ssai_conditioningClient = component "Conditioning Client" "Fetches pre-conditioned ad segments from the transcoder (cache_only); warms async on miss. (cmd/ssai/main.go)" "Go"
-        ssai_beaconSigner       = component "Beacon Signer" "Builds HMAC-signed impression + quartile tracker URLs from the auction winner. (pkg/adserving)" "Go"
-        ssai_segBeaconHandler   = component "Segment Beacon Handler" "/v1/ssai/seg: fires the pre-signed beacons on segment fetch, 302 to real media. (cmd/ssai/main.go)" "Go"
-        ssai_freqCapRecorder    = component "Frequency-Cap Recorder" "RECORDs the confirmed impression against the advertiser cap at stitch time. (cmd/ssai/main.go)" "Go"
+        tags "svc:ssai"
+        ssai_manifestParser     = component "Manifest Parser" "Parses HLS playlists / DASH MPD, finds CUE-OUT/CUE-IN ad-break spans. (pkg/ssai)" "Go" "svc:ssai"
+        ssai_auctionCaller      = component "Auction Caller" "Runs a per-break auction via the SSP (cap_defer=1 PEEK); mints a distinct trace per pod ad. (cmd/ssai/main.go)" "Go" "svc:ssai"
+        ssai_stitcher           = component "Ad Stitcher" "Splices winning ad segments into breaks (fills→slate→content), handles ad-pod depth. (cmd/ssai/main.go)" "Go" "svc:ssai"
+        ssai_conditioningClient = component "Conditioning Client" "Fetches pre-conditioned ad segments from the transcoder (cache_only); warms async on miss. (cmd/ssai/main.go)" "Go" "svc:ssai"
+        ssai_beaconSigner       = component "Beacon Signer" "Builds HMAC-signed impression + quartile tracker URLs from the auction winner. (pkg/adserving)" "Go" "svc:ssai"
+        ssai_segBeaconHandler   = component "Segment Beacon Handler" "/v1/ssai/seg: fires the pre-signed beacons on segment fetch, 302 to real media. (cmd/ssai/main.go)" "Go" "svc:ssai"
+        ssai_freqCapRecorder    = component "Frequency-Cap Recorder" "RECORDs the confirmed impression against the advertiser cap at stitch time. (cmd/ssai/main.go)" "Go" "svc:ssai"
       }
       transcoder  = container "Transcoder" "Cache-first ad conditioning (ffmpeg) to content-compatible HLS for SSAI." "Go" {
-        tx_httpHandler    = component "Condition Handler" "POST /v1/transcode/condition: branches cache_only vs transcode. (cmd/transcoder/main.go)" "Go"
-        tx_cacheLookup    = component "Cache Lookup (S3-first)" "Serving path: checks S3 for pre-conditioned segments, 404 on miss (no transcode). (pkg/transcode/conditioner.go)" "Go"
-        tx_ffmpegEngine   = component "FFmpeg Transcode Engine" "Execs ffmpeg to transcode mezzanine → HLS VOD playlist + segments. (pkg/transcode/runner.go)" "Go"
-        tx_abrRenditioner = component "ABR Ladder Renditioner" "Config-driven ABR ladder: codec/resolution/bitrate per rung → ffmpeg args. (pkg/transcode/profile.go, ladder.go)" "Go"
-        tx_segmentWriter  = component "Segment Writer" "Uploads conditioned playlist + segments to object storage. (pkg/transcode/conditioner.go, pkg/store/objects)" "Go"
+        tags "svc:transcoder"
+        tx_httpHandler    = component "Condition Handler" "POST /v1/transcode/condition: branches cache_only vs transcode. (cmd/transcoder/main.go)" "Go" "svc:transcoder"
+        tx_cacheLookup    = component "Cache Lookup (S3-first)" "Serving path: checks S3 for pre-conditioned segments, 404 on miss (no transcode). (pkg/transcode/conditioner.go)" "Go" "svc:transcoder"
+        tx_ffmpegEngine   = component "FFmpeg Transcode Engine" "Execs ffmpeg to transcode mezzanine → HLS VOD playlist + segments. (pkg/transcode/runner.go)" "Go" "svc:transcoder"
+        tx_abrRenditioner = component "ABR Ladder Renditioner" "Config-driven ABR ladder: codec/resolution/bitrate per rung → ffmpeg args. (pkg/transcode/profile.go, ladder.go)" "Go" "svc:transcoder"
+        tx_segmentWriter  = component "Segment Writer" "Uploads conditioned playlist + segments to object storage. (pkg/transcode/conditioner.go, pkg/store/objects)" "Go" "svc:transcoder"
       }
 
       # --- Async / data / money ---
       reporting   = container "Reporting + Billing" "Consumes NATS events → ClickHouse; query API; in-process billing engine (reserve/settle, TigerBeetle); hourly Parquet export." "Go" {
-        rep_natsConsumer  = component "NATS Event Consumer" "Consumes impression/click/conversion/view/auction events from JetStream and routes to the writer + billing. (cmd/reporting/main.go)" "Go"
-        rep_analyticsWriter = component "Analytics Store Writer" "Persists events to ClickHouse (hot) via analytics.Store; HotColdStore routes old reads to the Parquet lake over s3(). (cmd/reporting/analytics.go, hotcold.go)" "Go"
-        rep_billingEngine = component "Billing Engine" "In-process reserve/settle state machine per bid model (CPM/CPC/CPA/vCPM/CPCV) against the ledger. (pkg/billing, cmd/reporting/ledger.go)" "Go"
-        rep_balanceSink   = component "Balance Drawdown Sink" "Debits advertiser_balances on settle; publishes balance-depleted + cache-invalidate. (cmd/reporting/balance_sink.go)" "Go"
-        rep_pacingPub     = component "Pacing Snapshot Publisher" "Broadcasts per-campaign committed spend (settled+reserved) for DSP pacing reconcile. (cmd/reporting/spend_snapshot.go)" "Go"
-        rep_queryEngine   = component "Query / Report API" "HTTP query API: derived metrics (ecpm/ctr/fill), rollup-tier selection, tenant filtering. (cmd/reporting/main.go, pkg/reporting)" "Go"
-        rep_exportEngine  = component "Parquet Export Engine" "Hourly ClickHouse→Parquet export to object storage (idempotent per hour). (cmd/reporting/export.go)" "Go"
-        rep_traceInspector = component "Trace Inspector API" "Reconstructs the per-request flow timeline, redacted per account type. (cmd/reporting/trace.go)" "Go"
+        tags "svc:reporting"
+        rep_natsConsumer  = component "NATS Event Consumer" "Consumes impression/click/conversion/view/auction events from JetStream and routes to the writer + billing. (cmd/reporting/main.go)" "Go" "svc:reporting"
+        rep_analyticsWriter = component "Analytics Store Writer" "Persists events to ClickHouse (hot) via analytics.Store; HotColdStore routes old reads to the Parquet lake over s3(). (cmd/reporting/analytics.go, hotcold.go)" "Go" "svc:reporting"
+        rep_billingEngine = component "Billing Engine" "In-process reserve/settle state machine per bid model (CPM/CPC/CPA/vCPM/CPCV) against the ledger. (pkg/billing, cmd/reporting/ledger.go)" "Go" "svc:reporting"
+        rep_balanceSink   = component "Balance Drawdown Sink" "Debits advertiser_balances on settle; publishes balance-depleted + cache-invalidate. (cmd/reporting/balance_sink.go)" "Go" "svc:reporting"
+        rep_pacingPub     = component "Pacing Snapshot Publisher" "Broadcasts per-campaign committed spend (settled+reserved) for DSP pacing reconcile. (cmd/reporting/spend_snapshot.go)" "Go" "svc:reporting"
+        rep_queryEngine   = component "Query / Report API" "HTTP query API: derived metrics (ecpm/ctr/fill), rollup-tier selection, tenant filtering. (cmd/reporting/main.go, pkg/reporting)" "Go" "svc:reporting"
+        rep_exportEngine  = component "Parquet Export Engine" "Hourly ClickHouse→Parquet export to object storage (idempotent per hour). (cmd/reporting/export.go)" "Go" "svc:reporting"
+        rep_traceInspector = component "Trace Inspector API" "Reconstructs the per-request flow timeline, redacted per account type. (cmd/reporting/trace.go)" "Go" "svc:reporting"
       }
       pipeline    = container "Pipeline" "Publisher-file ingest, audience membership cache-writer (single writer), batch-conductor chain." "Go" {
-        pipe_dropzonePoller   = component "Drop-Zone Poller" "Scans the onboarding bucket on interval, enqueues ingest jobs, emails on completion. (cmd/pipeline/onboarding.go)" "Go"
-        pipe_ingestWorker     = component "Ingest Worker" "Drains audience_ingest_jobs (SKIP LOCKED + lease) and runs the shared processor. (cmd/pipeline/ingest_worker.go, pkg/ingestjobs)" "Go"
-        pipe_ingestProcessor  = component "Ingest Processor" "Shared path: read/decrypt staged file, field-map, AddMembers/UpsertSegment, publish ProfileSignal chunks. (pkg/ingest/processor.go)" "Go"
-        pipe_fileProcessor    = component "Decode / Validate Engine" "Auto-detects CSV/TSV/JSON/Parquet/gzip/PGP, validates rows, normalises, quarantines rejects. (pkg/ingest/decode.go, pkg/pipeline)" "Go"
-        pipe_membershipWriter = component "Audience Cache Writer (single writer)" "THE single writer: drains the membership changelog to Redis sets (SADD/SREM) + periodic reconcile with TTL + tombstones. (cmd/pipeline/audience_cache_writer.go)" "Go"
+        tags "svc:pipeline"
+        pipe_dropzonePoller   = component "Drop-Zone Poller" "Scans the onboarding bucket on interval, enqueues ingest jobs, emails on completion. (cmd/pipeline/onboarding.go)" "Go" "svc:pipeline"
+        pipe_ingestWorker     = component "Ingest Worker" "Drains audience_ingest_jobs (SKIP LOCKED + lease) and runs the shared processor. (cmd/pipeline/ingest_worker.go, pkg/ingestjobs)" "Go" "svc:pipeline"
+        pipe_ingestProcessor  = component "Ingest Processor" "Shared path: read/decrypt staged file, field-map, AddMembers/UpsertSegment, publish ProfileSignal chunks. (pkg/ingest/processor.go)" "Go" "svc:pipeline"
+        pipe_fileProcessor    = component "Decode / Validate Engine" "Auto-detects CSV/TSV/JSON/Parquet/gzip/PGP, validates rows, normalises, quarantines rejects. (pkg/ingest/decode.go, pkg/pipeline)" "Go" "svc:pipeline"
+        pipe_membershipWriter = component "Audience Cache Writer (single writer)" "THE single writer: drains the membership changelog to Redis sets (SADD/SREM) + periodic reconcile with TTL + tombstones. (cmd/pipeline/audience_cache_writer.go)" "Go" "svc:pipeline"
       }
       identityConsumer = container "Identity Consumer" "Builds the identity graph from observed IDs (deterministic + probabilistic)." "Go" {
-        idc_natsSub      = component "NATS Subscription" "Consumes adtech.identity.observed (queue-grouped), decodes ObservedEvent, acks/naks. (cmd/identity-consumer/main.go)" "Go"
-        idc_observer     = component "Observer + Batcher" "Buffers observations, dedupes via seen-set, batches by interval/size, applies linking rules. (pkg/identityobserve/observe.go)" "Go"
-        idc_determLinker = component "Deterministic Edge Builder" "Edges for 2+ identifiers co-observed on one request (confidence 1.0). (pkg/identityobserve/observe.go)" "Go"
-        idc_probMatcher  = component "Probabilistic Matcher" "IP+UA fingerprint bucketing for same-device heuristic links (skips shared IPs). (pkg/identityobserve/observe.go)" "Go"
-        idc_fpStore      = component "Fingerprint Bucket Store" "Redis sets of ids per fingerprint (TTL); in-memory fallback (single-replica). (cmd/identity-consumer/redisfp.go)" "Go"
-        idc_edgeWriter   = component "Edge Writer" "Batched idempotent upserts to identity_graph. (pkg/store/postgres/identity.go)" "Go"
+        tags "svc:identityConsumer"
+        idc_natsSub      = component "NATS Subscription" "Consumes adtech.identity.observed (queue-grouped), decodes ObservedEvent, acks/naks. (cmd/identity-consumer/main.go)" "Go" "svc:identityConsumer"
+        idc_observer     = component "Observer + Batcher" "Buffers observations, dedupes via seen-set, batches by interval/size, applies linking rules. (pkg/identityobserve/observe.go)" "Go" "svc:identityConsumer"
+        idc_determLinker = component "Deterministic Edge Builder" "Edges for 2+ identifiers co-observed on one request (confidence 1.0). (pkg/identityobserve/observe.go)" "Go" "svc:identityConsumer"
+        idc_probMatcher  = component "Probabilistic Matcher" "IP+UA fingerprint bucketing for same-device heuristic links (skips shared IPs). (pkg/identityobserve/observe.go)" "Go" "svc:identityConsumer"
+        idc_fpStore      = component "Fingerprint Bucket Store" "Redis sets of ids per fingerprint (TTL); in-memory fallback (single-replica). (cmd/identity-consumer/redisfp.go)" "Go" "svc:identityConsumer"
+        idc_edgeWriter   = component "Edge Writer" "Batched idempotent upserts to identity_graph. (pkg/store/postgres/identity.go)" "Go" "svc:identityConsumer"
       }
       audienceRT  = container "Audience RT" "Real-time retargeting: enroll on site-visit, suppress on purchase." "Go" {
-        art_behaviourConsumer  = component "Behaviour Consumer" "Consumes adtech.behaviour.observed (site_visit) and routes to the enroll engine. (cmd/audience-rt/main.go)" "Go"
-        art_conversionConsumer = component "Conversion Consumer" "Consumes adtech.events.conversion (purchase) and routes to suppression. (cmd/audience-rt/main.go)" "Go"
-        art_enrollEngine       = component "Enroll Engine" "Evaluates single-visit rules (min_count<=1), enrolls visitor+household into matching segments. (pkg/retargeting/retargeting.go)" "Go"
-        art_suppressionEngine  = component "Suppression + Cross-Sell Engine" "Suppresses converters (person+household via identity graph), per-SKU burn, cross-sell complements. (pkg/retargeting/retargeting.go)" "Go"
-        art_ruleMatcher        = component "Segment Rule Matcher" "Parses segment rule JSON, evaluates event/tag/min_count, resolves TTL window. (pkg/retargeting/retargeting.go)" "Go"
-        art_productViews       = component "SKU Retargeting Memory" "Records/recalls viewed/carted SKUs for DPA, burn-list filtered. (pkg/audience/store/postgres/product_views.go)" "Go"
-        art_membershipUpsert   = component "Membership Upsert" "Writes/removes segment members with TTL; first-enroll-wins lineage; fires changelog trigger. (cmd/audience-rt/main.go)" "Go"
+        tags "svc:audienceRT"
+        art_behaviourConsumer  = component "Behaviour Consumer" "Consumes adtech.behaviour.observed (site_visit) and routes to the enroll engine. (cmd/audience-rt/main.go)" "Go" "svc:audienceRT"
+        art_conversionConsumer = component "Conversion Consumer" "Consumes adtech.events.conversion (purchase) and routes to suppression. (cmd/audience-rt/main.go)" "Go" "svc:audienceRT"
+        art_enrollEngine       = component "Enroll Engine" "Evaluates single-visit rules (min_count<=1), enrolls visitor+household into matching segments. (pkg/retargeting/retargeting.go)" "Go" "svc:audienceRT"
+        art_suppressionEngine  = component "Suppression + Cross-Sell Engine" "Suppresses converters (person+household via identity graph), per-SKU burn, cross-sell complements. (pkg/retargeting/retargeting.go)" "Go" "svc:audienceRT"
+        art_ruleMatcher        = component "Segment Rule Matcher" "Parses segment rule JSON, evaluates event/tag/min_count, resolves TTL window. (pkg/retargeting/retargeting.go)" "Go" "svc:audienceRT"
+        art_productViews       = component "SKU Retargeting Memory" "Records/recalls viewed/carted SKUs for DPA, burn-list filtered. (pkg/audience/store/postgres/product_views.go)" "Go" "svc:audienceRT"
+        art_membershipUpsert   = component "Membership Upsert" "Writes/removes segment members with TTL; first-enroll-wins lineage; fires changelog trigger. (cmd/audience-rt/main.go)" "Go" "svc:audienceRT"
       }
       reportRunner = container "Report Runner" "Async report jobs (SKIP LOCKED queue) → CSV/Parquet in object storage; export zips." "Go" {
-        rr_scheduleEnqueuer = component "Schedule Enqueuer" "Loads due saved-report schedules and enqueues them as jobs. (pkg/reportrunner/runner.go)" "Go"
-        rr_jobQueue         = component "Job Queue Manager" "Claim/lease/heartbeat/reclaim on report_jobs (SKIP LOCKED) — multi-replica safe. (pkg/reportjobs/store.go)" "Go"
-        rr_renderer         = component "Report Renderer" "Renders query results to CSV / JSON / Parquet (Arrow). (pkg/reportjobs/formats.go, executor.go)" "Go"
-        rr_reportingClient  = component "Reporting HTTP Client" "Posts scoped report queries to the reporting service; routes segment exports. (pkg/reportrunner/store.go)" "Go"
-        rr_exportZip        = component "Export Zip Builder" "Materialises a per-account data-export zip (campaigns/creatives/invoices/…). (pkg/accountexport/builder.go)" "Go"
-        rr_emailNotifier    = component "Email Notifier" "Sends download-link emails on completion (best-effort). (pkg/email/email.go)" "Go"
-        rr_artifactStore    = component "Artifact Store" "Uploads artifacts + export zips to the private adtech-reports bucket. (pkg/store/objects)" "Go"
-        rr_staleSweeper     = component "Stale-Lease Sweeper" "Reclaims lapsed leases back to queued; GCs expired artifacts. (pkg/reportjobs/sweeper.go)" "Go"
-        rr_scopeResolver    = component "Tenant Scope Resolver" "Forces account/publisher scope at enqueue for schedule-driven jobs. (pkg/reportjobs/scope.go)" "Go"
+        tags "svc:reportRunner"
+        rr_scheduleEnqueuer = component "Schedule Enqueuer" "Loads due saved-report schedules and enqueues them as jobs. (pkg/reportrunner/runner.go)" "Go" "svc:reportRunner"
+        rr_jobQueue         = component "Job Queue Manager" "Claim/lease/heartbeat/reclaim on report_jobs (SKIP LOCKED) — multi-replica safe. (pkg/reportjobs/store.go)" "Go" "svc:reportRunner"
+        rr_renderer         = component "Report Renderer" "Renders query results to CSV / JSON / Parquet (Arrow). (pkg/reportjobs/formats.go, executor.go)" "Go" "svc:reportRunner"
+        rr_reportingClient  = component "Reporting HTTP Client" "Posts scoped report queries to the reporting service; routes segment exports. (pkg/reportrunner/store.go)" "Go" "svc:reportRunner"
+        rr_exportZip        = component "Export Zip Builder" "Materialises a per-account data-export zip (campaigns/creatives/invoices/…). (pkg/accountexport/builder.go)" "Go" "svc:reportRunner"
+        rr_emailNotifier    = component "Email Notifier" "Sends download-link emails on completion (best-effort). (pkg/email/email.go)" "Go" "svc:reportRunner"
+        rr_artifactStore    = component "Artifact Store" "Uploads artifacts + export zips to the private adtech-reports bucket. (pkg/store/objects)" "Go" "svc:reportRunner"
+        rr_staleSweeper     = component "Stale-Lease Sweeper" "Reclaims lapsed leases back to queued; GCs expired artifacts. (pkg/reportjobs/sweeper.go)" "Go" "svc:reportRunner"
+        rr_scopeResolver    = component "Tenant Scope Resolver" "Forces account/publisher scope at enqueue for schedule-driven jobs. (pkg/reportjobs/scope.go)" "Go" "svc:reportRunner"
       }
       webhooks    = container "Webhooks" "Delivers business events to registered partner URLs." "Go" {
-        wh_natsConsumer      = component "NATS Event Consumer" "Subscribes to account-scoped subjects (budget/balance depleted, campaign state, enrolled, report done); retry-until-stick. (cmd/webhooks/main.go)" "Go"
-        wh_eventRouter       = component "Event Router" "Maps NATS subjects → customer event names, extracts account_id, drops poison. (cmd/webhooks/main.go)" "Go"
-        wh_dispatcher        = component "Dispatcher" "Looks up subscriptions, wraps the self-describing envelope, fans out per endpoint. (pkg/webhooks/webhooks.go)" "Go"
-        wh_subscriptionStore = component "Subscription Store" "Reads active webhook subscriptions for account+event (RLS-scoped). (pkg/webhooks/store_postgres.go)" "Go"
-        wh_httpDelivery      = component "HTTP Delivery Client" "POSTs the signed envelope with exponential-backoff retries. (pkg/webhooks/webhooks.go)" "Go"
-        wh_payloadSigner     = component "Payload Signer" "HMAC-SHA256 of the body into X-Adtech-Signature. (pkg/webhooks/webhooks.go)" "Go"
-        wh_deliveryLog       = component "Delivery Log" "Records each delivery attempt to webhook_deliveries for audit. (pkg/webhooks/store_postgres.go)" "Go"
+        tags "svc:webhooks"
+        wh_natsConsumer      = component "NATS Event Consumer" "Subscribes to account-scoped subjects (budget/balance depleted, campaign state, enrolled, report done); retry-until-stick. (cmd/webhooks/main.go)" "Go" "svc:webhooks"
+        wh_eventRouter       = component "Event Router" "Maps NATS subjects → customer event names, extracts account_id, drops poison. (cmd/webhooks/main.go)" "Go" "svc:webhooks"
+        wh_dispatcher        = component "Dispatcher" "Looks up subscriptions, wraps the self-describing envelope, fans out per endpoint. (pkg/webhooks/webhooks.go)" "Go" "svc:webhooks"
+        wh_subscriptionStore = component "Subscription Store" "Reads active webhook subscriptions for account+event (RLS-scoped). (pkg/webhooks/store_postgres.go)" "Go" "svc:webhooks"
+        wh_httpDelivery      = component "HTTP Delivery Client" "POSTs the signed envelope with exponential-backoff retries. (pkg/webhooks/webhooks.go)" "Go" "svc:webhooks"
+        wh_payloadSigner     = component "Payload Signer" "HMAC-SHA256 of the body into X-Adtech-Signature. (pkg/webhooks/webhooks.go)" "Go" "svc:webhooks"
+        wh_deliveryLog       = component "Delivery Log" "Records each delivery attempt to webhook_deliveries for audit. (pkg/webhooks/store_postgres.go)" "Go" "svc:webhooks"
       }
       notifications = container "Notifications" "In-app portal notifications (the bell)." "Go" {
-        ntf_natsConsumer  = component "NATS Event Consumer" "Queue-grouped consumer of account-scoped business events; retry-until-stick. (cmd/notifications/main.go)" "Go"
-        ntf_eventMapper   = component "Event → Notification Mapper" "Maps event payloads to Notification rows; drops unmapped/missing-account poison. (pkg/notifications/translate.go)" "Go"
-        ntf_postgresWriter = component "Notification Store Writer" "Inserts notifications (RLS GUC + explicit account filter); also the read side for the bell. (pkg/notifications/store_postgres.go)" "Go"
+        tags "svc:notifications"
+        ntf_natsConsumer  = component "NATS Event Consumer" "Queue-grouped consumer of account-scoped business events; retry-until-stick. (cmd/notifications/main.go)" "Go" "svc:notifications"
+        ntf_eventMapper   = component "Event → Notification Mapper" "Maps event payloads to Notification rows; drops unmapped/missing-account poison. (pkg/notifications/translate.go)" "Go" "svc:notifications"
+        ntf_postgresWriter = component "Notification Store Writer" "Inserts notifications (RLS GUC + explicit account filter); also the read side for the bell. (pkg/notifications/store_postgres.go)" "Go" "svc:notifications"
       }
       batchConductor = container "Batch Conductor" "Hourly completion-ordered data chain: rollups → export → profile-builder → privacy purge." "Go (CronJob)" {
-        bc_checkpoint   = component "Checkpoint Gate" "CRITICAL first step: probes pipeline + reporting /readyz; aborts the chain if ingestion is down. (pkg/batch/chain.go)" "Go"
-        bc_rollupRunner = component "Rollup Runner" "Runs reporting rollup tiers minute→hourly→daily→monthly (finest first). (pkg/batch/chain.go)" "Go"
-        bc_exportStep   = component "Parquet Export Step" "Triggers reporting's ClickHouse→Parquet export (idempotent per hour). (pkg/batch/chain.go)" "Go"
-        bc_profileBuilder = component "Profile-Builder Step" "In-process clustering → enroll/prune/expand audience memberships (ClickHouse behaviour reads). (pkg/profilebuilder)" "Go"
-        bc_privacyDelete = component "Privacy-Delete Step" "In-process GDPR purge of pending opt-outs across Postgres + extras. (pkg/privacydelete)" "Go"
-        bc_privacyVerify = component "Privacy-Verify Step" "Residual-PII audit after the purge; red run on incomplete deletions. (pkg/privacydelete)" "Go"
-        bc_recorder     = component "Run Recorder" "Writes a batch_runs row per step + announces run_completed on NATS. (cmd/batch-conductor/main.go, pkg/batch)" "Go"
+        tags "svc:batchConductor"
+        bc_checkpoint   = component "Checkpoint Gate" "CRITICAL first step: probes pipeline + reporting /readyz; aborts the chain if ingestion is down. (pkg/batch/chain.go)" "Go" "svc:batchConductor"
+        bc_rollupRunner = component "Rollup Runner" "Runs reporting rollup tiers minute→hourly→daily→monthly (finest first). (pkg/batch/chain.go)" "Go" "svc:batchConductor"
+        bc_exportStep   = component "Parquet Export Step" "Triggers reporting's ClickHouse→Parquet export (idempotent per hour). (pkg/batch/chain.go)" "Go" "svc:batchConductor"
+        bc_profileBuilder = component "Profile-Builder Step" "In-process clustering → enroll/prune/expand audience memberships (ClickHouse behaviour reads). (pkg/profilebuilder)" "Go" "svc:batchConductor"
+        bc_privacyDelete = component "Privacy-Delete Step" "In-process GDPR purge of pending opt-outs across Postgres + extras. (pkg/privacydelete)" "Go" "svc:batchConductor"
+        bc_privacyVerify = component "Privacy-Verify Step" "Residual-PII audit after the purge; red run on incomplete deletions. (pkg/privacydelete)" "Go" "svc:batchConductor"
+        bc_recorder     = component "Run Recorder" "Writes a batch_runs row per step + announces run_completed on NATS. (cmd/batch-conductor/main.go, pkg/batch)" "Go" "svc:batchConductor"
       }
 
       # --- Datastores ---
@@ -623,6 +640,96 @@ workspace "Ad Tech Mono" "C4 model of the full-stack programmatic advertising pl
       }
       element "Software System" {
         background #1168bd
+        color #ffffff
+      }
+
+      // Per-service identity colours — one hue per service, used on the
+      // container AND its components so a service reads the same in every
+      // view (families share hues: sell-side blues, serving greens, data
+      // indigos/cyans, identity fuchsias, eventing ambers).
+      element "svc:gateway" {
+        background #0d9488
+        stroke #0b7268
+        color #ffffff
+      }
+      element "svc:ssp" {
+        background #2563eb
+        stroke #1e4fc2
+        color #ffffff
+      }
+      element "svc:exchange" {
+        background #ea580c
+        stroke #c2490a
+        color #ffffff
+      }
+      element "svc:dsp" {
+        background #7c3aed
+        stroke #6530c4
+        color #ffffff
+      }
+      element "svc:adserver" {
+        background #16a34a
+        stroke #12863d
+        color #ffffff
+      }
+      element "svc:pubAdserver" {
+        background #0369a1
+        stroke #025685
+        color #ffffff
+      }
+      element "svc:tracker" {
+        background #dc2626
+        stroke #b61f1f
+        color #ffffff
+      }
+      element "svc:ssai" {
+        background #db2777
+        stroke #b52062
+        color #ffffff
+      }
+      element "svc:transcoder" {
+        background #be185d
+        stroke #9c144c
+        color #ffffff
+      }
+      element "svc:reporting" {
+        background #4f46e5
+        stroke #413abd
+        color #ffffff
+      }
+      element "svc:reportRunner" {
+        background #6366f1
+        stroke #5255c7
+        color #ffffff
+      }
+      element "svc:pipeline" {
+        background #0891b2
+        stroke #067793
+        color #ffffff
+      }
+      element "svc:batchConductor" {
+        background #155e75
+        stroke #114d60
+        color #ffffff
+      }
+      element "svc:identityConsumer" {
+        background #c026d3
+        stroke #9e20ae
+        color #ffffff
+      }
+      element "svc:audienceRT" {
+        background #a21caf
+        stroke #851790
+        color #ffffff
+      }
+      element "svc:webhooks" {
+        background #b45309
+        stroke #934407
+        color #ffffff
+      }
+      element "svc:notifications" {
+        background #d97706
+        stroke #b36205
         color #ffffff
       }
     }

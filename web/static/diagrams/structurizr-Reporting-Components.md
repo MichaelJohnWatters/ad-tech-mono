@@ -9,30 +9,30 @@ graph LR
       style 9 fill:#ffffff,stroke:#0b4884,color:#0b4884
 
       subgraph 85 ["Reporting + Billing"]
-        style 85 fill:#ffffff,stroke:#0b4884,color:#0b4884
+        style 85 fill:#ffffff,stroke:#413abd,color:#413abd
 
         86["<div style='font-weight: bold'>NATS Event Consumer</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Consumes<br />impression/click/conversion/view/auction<br />events from JetStream and<br />routes to the writer +<br />billing.<br />(cmd/reporting/main.go)</div>"]
-        style 86 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 86 fill:#4f46e5,stroke:#413abd,color:#ffffff
         87["<div style='font-weight: bold'>Analytics Store Writer</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Persists events to ClickHouse<br />(hot) via analytics.Store;<br />HotColdStore routes old reads<br />to the Parquet lake over<br />s3().<br />(cmd/reporting/analytics.go,<br />hotcold.go)</div>"]
-        style 87 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 87 fill:#4f46e5,stroke:#413abd,color:#ffffff
         88["<div style='font-weight: bold'>Billing Engine</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>In-process reserve/settle<br />state machine per bid model<br />(CPM/CPC/CPA/vCPM/CPCV)<br />against the ledger.<br />(pkg/billing,<br />cmd/reporting/ledger.go)</div>"]
-        style 88 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 88 fill:#4f46e5,stroke:#413abd,color:#ffffff
         89["<div style='font-weight: bold'>Balance Drawdown Sink</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Debits advertiser_balances on<br />settle; publishes<br />balance-depleted +<br />cache-invalidate.<br />(cmd/reporting/balance_sink.go)</div>"]
-        style 89 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 89 fill:#4f46e5,stroke:#413abd,color:#ffffff
         90["<div style='font-weight: bold'>Pacing Snapshot Publisher</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Broadcasts per-campaign<br />committed spend<br />(settled+reserved) for DSP<br />pacing reconcile.<br />(cmd/reporting/spend_snapshot.go)</div>"]
-        style 90 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 90 fill:#4f46e5,stroke:#413abd,color:#ffffff
         91["<div style='font-weight: bold'>Query / Report API</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>HTTP query API: derived<br />metrics (ecpm/ctr/fill),<br />rollup-tier selection, tenant<br />filtering.<br />(cmd/reporting/main.go,<br />pkg/reporting)</div>"]
-        style 91 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 91 fill:#4f46e5,stroke:#413abd,color:#ffffff
         92["<div style='font-weight: bold'>Parquet Export Engine</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Hourly ClickHouse→Parquet<br />export to object storage<br />(idempotent per hour).<br />(cmd/reporting/export.go)</div>"]
-        style 92 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 92 fill:#4f46e5,stroke:#413abd,color:#ffffff
         93["<div style='font-weight: bold'>Trace Inspector API</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Reconstructs the per-request<br />flow timeline, redacted per<br />account type.<br />(cmd/reporting/trace.go)</div>"]
-        style 93 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 93 fill:#4f46e5,stroke:#413abd,color:#ffffff
       end
 
       10["<div style='font-weight: bold'>Gateway</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Auth (JWT/SSO/API-key), RBAC,<br />HTMX portals, REST API, proxy<br />to internal gRPC.</div>"]
-      style 10 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 10 fill:#0d9488,stroke:#0b7268,color:#ffffff
       137["<div style='font-weight: bold'>Batch Conductor</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go (CronJob)]</div><div style='font-size: 80%; margin-top:10px'>Hourly completion-ordered<br />data chain: rollups → export<br />→ profile-builder → privacy<br />purge.</div>"]
-      style 137 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 137 fill:#155e75,stroke:#114d60,color:#ffffff
       145[("<div style='font-weight: bold'>PostgreSQL</div><div style='font-size: 70%; margin-top: 0px'>[Container: PostgreSQL]</div><div style='font-size: 80%; margin-top:10px'>Transactional store,<br />multi-tenant via RLS<br />(adtech_app NOBYPASSRLS).</div>")]
       style 145 fill:#438dd5,stroke:#2e6295,color:#ffffff
       147[("<div style='font-weight: bold'>ClickHouse</div><div style='font-size: 70%; margin-top: 0px'>[Container: ClickHouse]</div><div style='font-size: 80%; margin-top:10px'>Analytics event store<br />(impressions, auctions,<br />auction_wins/losses/shades,<br />…).</div>")]
