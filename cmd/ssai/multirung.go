@@ -102,7 +102,7 @@ func (d *stitcherDeps) serveMultiRungDASH(ctx context.Context, w http.ResponseWr
 				if cond == nil || len(cond.Segments) == 0 {
 					continue
 				}
-				mc := macroCtxFor(wn, wn.podTrace, d.trackerURL)
+				mc := macroCtxFor(wn, wn.podTrace, d.trackerURL, constants.ChannelVideo)
 				segs = append(segs, d.adSegments(cond, mc, constants.ChannelVideo, session, wn.podTrace, i, false)...)
 			}
 			return segs
