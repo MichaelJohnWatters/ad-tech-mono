@@ -198,7 +198,11 @@ spec:
         # HTTP→HTTPS redirect: the app routers are websecure-only, so without this
         # a client on http:// gets a 404 instead of being bounced to https. Local
         # direct klipper ports (localhost:PORT) bypass Traefik and are unaffected.
-        - --entryPoints.web.http.redirections.entryPoint.to=websecure
+        # MUST advertise the EXTERNAL port (`to=:443`, not `to=websecure`): the
+        # entrypoint form writes websecure's in-pod :8443 into the Location
+        # header, and on the VM IP 8443 is the GATEWAY's public HTTPS port — so
+        # every http:// visit to a demo site 301'd onto the portal login.
+        - --entryPoints.web.http.redirections.entryPoint.to=:443
         - --entryPoints.web.http.redirections.entryPoint.scheme=https
         - --entryPoints.websecure.address=:8443/tcp
         - --api.dashboard=true
