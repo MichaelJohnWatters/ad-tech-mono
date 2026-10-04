@@ -251,8 +251,27 @@ func TestManifestHandlerStitches(t *testing.T) {
 	if !strings.Contains(out, "/v1/ssai/seg?") {
 		t.Errorf("no SSAI segment beacon URLs in manifest:\n%s", out)
 	}
-	if !strings.Contains(out, "event=start") || !strings.Contains(out, "event=complete") {
-		t.Errorf("quartile events missing from segment URLs:\n%s", out)
+	// Quartile events are now sealed in the opaque segment token, not plaintext on
+	// the URL — decode the tokens and assert the events are assigned to segments.
+	var segEvents []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.Contains(line, "/v1/ssai/seg") {
+			continue
+		}
+		u, err := url.Parse(line)
+		if err != nil {
+			continue
+		}
+		p, err := openSegToken(u.Query().Get("t"))
+		if err != nil {
+			t.Fatalf("segment token won't open: %v", err)
+		}
+		segEvents = append(segEvents, p.Events...)
+	}
+	allEvents := strings.Join(segEvents, ",")
+	if !strings.Contains(allEvents, "start") || !strings.Contains(allEvents, "complete") {
+		t.Errorf("quartile events missing from segment tokens: %v", segEvents)
 	}
 	// The stitched output must still be a valid manifest.
 	if _, err := ssai.ParseMedia(out); err != nil {
@@ -1024,7 +1043,9 @@ func TestSegmentHandlerFiresBeaconAndRedirects(t *testing.T) {
 	signed := adserving.BuildVideoEventURL(mc, "midpoint")
 
 	d := &stitcherDeps{trackerURL: tracker.URL, client: &http.Client{}}
-	u := "/v1/ssai/seg?ad=trace-x&event=midpoint&redir=https%3A%2F%2Fcdn.example%2Fad.mp4&beacon=" + url.QueryEscape(signed)
+	// Build the segment URL through the real builder so the opaque token round-trips
+	// (seal → handler opens → fires + redirects) — nothing plaintext on the URL.
+	u := d.segmentURL("sess-x", "trace-x", 0, 0, []string{"midpoint"}, []string{signed}, "https://cdn.example/ad.mp4")
 	req := httptest.NewRequest("GET", u, nil)
 	rec := httptest.NewRecorder()
 	d.segmentHandler(rec, req)
