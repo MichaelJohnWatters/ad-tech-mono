@@ -84,7 +84,7 @@ func audioHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stubF
 			BidModel:     defaultStr2(winner.BidModel, "cpm"),
 			DealID:       winner.DealID,
 			TrackerURL:   beaconBase,
-			LandingURL:   landingForDomain(winner.AdvertiserDomain),
+			LandingURL:   landingForDomain(secureBase, winner.AdvertiserDomain),
 			URLTTL:       time.Hour,
 		}
 
