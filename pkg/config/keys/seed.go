@@ -11,11 +11,18 @@ var Seed = struct {
 	ShopURLBase      config.StringKey
 }{
 	CreativesURLBase: config.RawString("seed.creatives_url_base", ""),
-	LandingURLBase:   config.RawString("seed.landing_url_base", "http://localhost:8080/dev/landing"),
-	// ShopURLBase is the browser-reachable base of the demo advertiser shop
-	// (cmd/demoadv). Product-catalog rows' product_url (the Dynamic Product Ad
-	// click target) become "{base}/models/{sku}". Default = the host-run shop
-	// (:9200); set seed.shop_url_base / SEED_SHOP_URL_BASE to the in-cluster
-	// ingress (https://shop.<domain>) so the DPA chase links back to the shop.
-	ShopURLBase: config.RawString("seed.shop_url_base", "http://localhost:9200"),
+	// LandingURLBase is baked into each creative's click-through redirect at seed
+	// time (NOT host-rewritten at serve time like the beacon URLs), so it must be
+	// browser-reachable as-is. Default = the public gateway ingress (serves
+	// /dev/landing/{slug}) so click-throughs work in a browser with NO
+	// `make demo-forward` bridge. localhost:8080 only resolved behind that bridge.
+	// Staging/prod set seed.landing_url_base / SEED_LANDING_URL_BASE to their gateway.
+	LandingURLBase: config.RawString("seed.landing_url_base", "https://gateway.adtech.local/dev/landing"),
+	// ShopURLBase is the browser-reachable base of the demo advertiser shop.
+	// Product-catalog rows' product_url (the Dynamic Product Ad click target)
+	// become "{base}/models/{sku}" — baked at seed time, so browser-reachable
+	// as-is. Default = the in-cluster shop ingress so the DPA chase links back
+	// to the shop with no bridge. Host-run shop (:9200) or staging/prod: set
+	// seed.shop_url_base / SEED_SHOP_URL_BASE.
+	ShopURLBase: config.RawString("seed.shop_url_base", "https://shop.adtech.local"),
 }

@@ -145,7 +145,7 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, omidFn
 			Width:        winner.Width,
 			Height:       winner.Height,
 			TrackerURL:   beaconBase,
-			LandingURL:   landingForDomain(winner.AdvertiserDomain),
+			LandingURL:   landingForDomain(secureBase, winner.AdvertiserDomain),
 			URLTTL:       time.Hour,
 		}
 
@@ -246,7 +246,7 @@ func parsePodSize(s string) int {
 }
 
 // macroCtxForWinner builds the MacroContext for one video winner's beacons.
-func macroCtxForWinner(winner *sspVideoWinner, trackerURL string) adserving.MacroContext {
+func macroCtxForWinner(winner *sspVideoWinner, trackerURL, secureBase string) adserving.MacroContext {
 	return adserving.MacroContext{
 		AuctionID:    firstNonEmpty(winner.TraceID, winner.CampaignID),
 		AuctionPrice: winner.ClearingPrice,
@@ -264,7 +264,7 @@ func macroCtxForWinner(winner *sspVideoWinner, trackerURL string) adserving.Macr
 		Width:        winner.Width,
 		Height:       winner.Height,
 		TrackerURL:   trackerURL,
-		LandingURL:   landingForDomain(winner.AdvertiserDomain),
+		LandingURL:   landingForDomain(secureBase, winner.AdvertiserDomain),
 		URLTTL:       time.Hour,
 	}
 }
@@ -301,13 +301,13 @@ func buildPodVAST(ctx context.Context, sspURL, trackerURL, secureBase string, r 
 		// Re-host the media URL per pod ad on an HTTPS ingress request (trackerURL
 		// here is already the per-request beacon base). No-op otherwise.
 		winner.MediaURL = rewriteHostIfSecure(r, winner.MediaURL, secureBase)
-		spec := buildVASTSpec(winner, macroCtxForWinner(winner, trackerURL))
+		spec := buildVASTSpec(winner, macroCtxForWinner(winner, trackerURL, secureBase))
 		spec.Sequence = len(specs) + 1
 		if vendor, scriptURL := omidFn(); scriptURL != "" {
 			spec.Verifications = []vast.OMIDVerification{{
 				Vendor:         vendor,
 				ScriptURL:      scriptURL,
-				NotExecutedURL: adserving.BuildVideoEventURL(macroCtxForWinner(winner, trackerURL), "omid-not-executed"),
+				NotExecutedURL: adserving.BuildVideoEventURL(macroCtxForWinner(winner, trackerURL, secureBase), "omid-not-executed"),
 			}}
 		}
 		specs = append(specs, spec)
@@ -459,18 +459,25 @@ func serveVideoNoBid(w http.ResponseWriter, reqLog *slog.Logger, stubFn func() b
 }
 
 // landingForDomain maps an advertiser domain to the corresponding
-// /dev/landing/{slug} mock URL — matches what the display flow does
-// via cmd/seed.brandSlugFromDomain. Inlined here so this file stays
-// self-contained.
-func landingForDomain(domain string) string {
+// /dev/landing/{slug} mock URL (served by the gateway) — matches what the
+// display flow does via cmd/seed.brandSlugFromDomain. base is the browser-
+// reachable gateway base (secureBase = publisher_adserver.public_url_secure,
+// https://gateway.<domain>) so the click-through resolves in a browser with NO
+// `make demo-forward` bridge — it was hardcoded to http://localhost:8080, which
+// only worked behind that bridge.
+func landingForDomain(base, domain string) string {
+	if base == "" {
+		base = "https://gateway.adtech.local"
+	}
+	base = strings.TrimRight(base, "/")
 	if domain == "" {
-		return "http://localhost:8080/dev/landing/default"
+		return base + "/dev/landing/default"
 	}
 	slug := domain
 	if i := indexByte(slug, '.'); i > 0 {
 		slug = slug[:i]
 	}
-	return "http://localhost:8080/dev/landing/" + slug
+	return base + "/dev/landing/" + slug
 }
 
 // indexByte is strings.IndexByte without the strings import in this

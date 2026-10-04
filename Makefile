@@ -273,7 +273,7 @@ hosts: ## Point every *.adtech.local ingress host (core + demo sites, derived fr
 security-demo: ## LIVE "try to break it" run: fires real forgery/tamper/spoof/fraud/input attacks at the money+attribution paths and shows each rejected (fill-independent — constructs its own signed beacon). Needs `make demo-forward`. Full 9-attack proof = make test-e2e-security.
 	go run ./cmd/securitydemo
 
-demo-forward: ## Bridge host↔Rancher cluster: port-forward the serving fleet to localhost (run in its OWN terminal; Ctrl-C stops). Do this before demo-setup/demosite on k3s.
+demo-forward: ## SETUP/TOOLING ONLY (NOT needed to browse the demo — sites/portal work via *.adtech.local). Bridges host→cluster on localhost for CLI tools (seed/simulator/prewarm/e2e). Run in its OWN terminal; Ctrl-C stops.
 	bash scripts/demo-forward.sh
 
 demo-setup: ## Interview-ready: seed + warm (prewarm/SSAI) + baseline traffic + VERIFY every ad format serves. Needs `make demo-forward` running.
