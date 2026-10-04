@@ -9,22 +9,22 @@ graph LR
       style 9 fill:#ffffff,stroke:#0b4884,color:#0b4884
 
       subgraph 137 ["Batch Conductor"]
-        style 137 fill:#ffffff,stroke:#0b4884,color:#0b4884
+        style 137 fill:#ffffff,stroke:#114d60,color:#114d60
 
         138["<div style='font-weight: bold'>Checkpoint Gate</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>CRITICAL first step: probes<br />pipeline + reporting /readyz;<br />aborts the chain if ingestion<br />is down. (pkg/batch/chain.go)</div>"]
-        style 138 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 138 fill:#155e75,stroke:#114d60,color:#ffffff
         139["<div style='font-weight: bold'>Rollup Runner</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Runs reporting rollup tiers<br />minute→hourly→daily→monthly<br />(finest first).<br />(pkg/batch/chain.go)</div>"]
-        style 139 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 139 fill:#155e75,stroke:#114d60,color:#ffffff
         140["<div style='font-weight: bold'>Parquet Export Step</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Triggers reporting's<br />ClickHouse→Parquet export<br />(idempotent per hour).<br />(pkg/batch/chain.go)</div>"]
-        style 140 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 140 fill:#155e75,stroke:#114d60,color:#ffffff
         141["<div style='font-weight: bold'>Profile-Builder Step</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>In-process clustering →<br />enroll/prune/expand audience<br />memberships (ClickHouse<br />behaviour reads).<br />(pkg/profilebuilder)</div>"]
-        style 141 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 141 fill:#155e75,stroke:#114d60,color:#ffffff
         142["<div style='font-weight: bold'>Privacy-Delete Step</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>In-process GDPR purge of<br />pending opt-outs across<br />Postgres + extras.<br />(pkg/privacydelete)</div>"]
-        style 142 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 142 fill:#155e75,stroke:#114d60,color:#ffffff
         143["<div style='font-weight: bold'>Privacy-Verify Step</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Residual-PII audit after the<br />purge; red run on incomplete<br />deletions.<br />(pkg/privacydelete)</div>"]
-        style 143 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 143 fill:#155e75,stroke:#114d60,color:#ffffff
         144["<div style='font-weight: bold'>Run Recorder</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Writes a batch_runs row per<br />step + announces<br />run_completed on NATS.<br />(cmd/batch-conductor/main.go,<br />pkg/batch)</div>"]
-        style 144 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 144 fill:#155e75,stroke:#114d60,color:#ffffff
       end
 
       145[("<div style='font-weight: bold'>PostgreSQL</div><div style='font-size: 70%; margin-top: 0px'>[Container: PostgreSQL]</div><div style='font-size: 80%; margin-top:10px'>Transactional store,<br />multi-tenant via RLS<br />(adtech_app NOBYPASSRLS).</div>")]
@@ -36,9 +36,9 @@ graph LR
       149[("<div style='font-weight: bold'>Object Storage</div><div style='font-size: 70%; margin-top: 0px'>[Container: S3]</div><div style='font-size: 80%; margin-top:10px'>Creatives + the Parquet/Delta<br />lake (Minio local / S3 prod).</div>")]
       style 149 fill:#438dd5,stroke:#2e6295,color:#ffffff
       85["<div style='font-weight: bold'>Reporting + Billing</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Consumes NATS events →<br />ClickHouse; query API;<br />in-process billing engine<br />(reserve/settle,<br />TigerBeetle); hourly Parquet<br />export.</div>"]
-      style 85 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 85 fill:#4f46e5,stroke:#413abd,color:#ffffff
       94["<div style='font-weight: bold'>Pipeline</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Publisher-file ingest,<br />audience membership<br />cache-writer (single writer),<br />batch-conductor chain.</div>"]
-      style 94 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 94 fill:#0891b2,stroke:#067793,color:#ffffff
     end
 
     148-. "<div>Consumes all business events</div><div style='font-size: 70%'></div>" .->85

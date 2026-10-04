@@ -12,24 +12,24 @@ graph LR
       style 9 fill:#ffffff,stroke:#0b4884,color:#0b4884
 
       subgraph 62 ["Tracker"]
-        style 62 fill:#ffffff,stroke:#0b4884,color:#0b4884
+        style 62 fill:#ffffff,stroke:#b61f1f,color:#b61f1f
 
         63["<div style='font-weight: bold'>Beacon Handlers</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>/v1/t/imp|click|conv|view|video|audio:<br />validate → fraud → dedup →<br />publish; click 302-redirects.<br />(cmd/tracker/main.go,<br />mediagate.go)</div>"]
-        style 63 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 63 fill:#dc2626,stroke:#b61f1f,color:#ffffff
         64["<div style='font-weight: bold'>HMAC Validator</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Validates beacon URL<br />signatures (SHA-256,<br />key-rotation overlap, exp=<br />TTL).<br />(pkg/adserving/signing.go)</div>"]
-        style 64 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 64 fill:#dc2626,stroke:#b61f1f,color:#ffffff
         65["<div style='font-weight: bold'>Real-Time Fraud Checker</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Inline per-beacon checks: bot<br />UA, datacenter IP, per-IP<br />rate limit, DB blocklists.<br />(pkg/fraud/realtime.go)</div>"]
-        style 65 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 65 fill:#dc2626,stroke:#b61f1f,color:#ffffff
         66["<div style='font-weight: bold'>Fraud Blocklist Cache</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Warm cache of<br />fraud_blocklists; polls<br />Postgres + NATS-invalidate,<br />pushes IP/UA blocks into the<br />scorer.<br />(cmd/tracker/blocklist.go)</div>"]
-        style 66 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 66 fill:#dc2626,stroke:#b61f1f,color:#ffffff
         67["<div style='font-weight: bold'>Dedup Gate</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Redis SetNX on (event_type,<br />trace_id); drops browser<br />retry / double-tap replays.<br />(cmd/tracker/dedup.go)</div>"]
-        style 67 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 67 fill:#dc2626,stroke:#b61f1f,color:#ffffff
         68["<div style='font-weight: bold'>Event Publisher</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Publishes beacon events to<br />NATS with stable Msg-Id;<br />disk-spool fallback on NATS<br />stall. (cmd/tracker/main.go,<br />pkg/events)</div>"]
-        style 68 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 68 fill:#dc2626,stroke:#b61f1f,color:#ffffff
         69["<div style='font-weight: bold'>Retargeting Pixel + Identity Bridge</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>/v1/t/rt site-visit pixel<br />(consent-gated) + publishes<br />first-party identity edges.<br />(cmd/tracker/retargeting.go,<br />main.go)</div>"]
-        style 69 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 69 fill:#dc2626,stroke:#b61f1f,color:#ffffff
         70["<div style='font-weight: bold'>ARA Handler</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Privacy Sandbox Attribution<br />Reporting API: source/trigger<br />registration + report<br />ingestion.<br />(cmd/tracker/ara.go)</div>"]
-        style 70 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 70 fill:#dc2626,stroke:#b61f1f,color:#ffffff
       end
 
       145[("<div style='font-weight: bold'>PostgreSQL</div><div style='font-size: 70%; margin-top: 0px'>[Container: PostgreSQL]</div><div style='font-size: 80%; margin-top:10px'>Transactional store,<br />multi-tenant via RLS<br />(adtech_app NOBYPASSRLS).</div>")]

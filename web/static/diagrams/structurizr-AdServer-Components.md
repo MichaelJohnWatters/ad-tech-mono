@@ -9,24 +9,24 @@ graph LR
       style 9 fill:#ffffff,stroke:#0b4884,color:#0b4884
 
       subgraph 44 ["Ad Server"]
-        style 44 fill:#ffffff,stroke:#0b4884,color:#0b4884
+        style 44 fill:#ffffff,stroke:#12863d,color:#12863d
 
         45["<div style='font-weight: bold'>Serve Handler</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>HTTP /v1/ad/serve + gRPC<br />InternalAdServeService.Serve:<br />dispatches the decisioning →<br />render pipeline.<br />(cmd/adserver/main.go)</div>"]
-        style 45 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 45 fill:#16a34a,stroke:#12863d,color:#ffffff
         46["<div style='font-weight: bold'>Frequency Cap Manager</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Redis-backed per-user +<br />per-household campaign caps,<br />atomic peek/record Lua (PEEK<br />vs RECORD split).<br />(cmd/adserver/freqcap.go)</div>"]
-        style 46 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 46 fill:#16a34a,stroke:#12863d,color:#ffffff
         47["<div style='font-weight: bold'>Creative Resolver</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Warm metadata cache + L1 body<br />cache; loads approved<br />creatives from Postgres,<br />fetches bodies from S3 on<br />miss.<br />(cmd/adserver/creatives.go)</div>"]
-        style 47 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 47 fill:#16a34a,stroke:#12863d,color:#ffffff
         48["<div style='font-weight: bold'>Macro Substitution + Signer</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Substitutes ${…} macros and<br />builds HMAC-signed<br />impression/click/viewability<br />tracker URLs.<br />(pkg/adserving/macros.go,<br />signing.go)</div>"]
-        style 48 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 48 fill:#16a34a,stroke:#12863d,color:#ffffff
         49["<div style='font-weight: bold'>Dynamic Product Assembler</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Render-time assembly for<br />format=dynamic_product: reads<br />recent SKUs + catalog, runs<br />the Go template, static<br />{{else}} fallback.<br />(cmd/adserver/dynamic_products.go)</div>"]
-        style 49 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 49 fill:#16a34a,stroke:#12863d,color:#ffffff
         50["<div style='font-weight: bold'>Creative Bandit</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>In-memory Thompson-sampling<br />creative rotation,<br />warm-started from reporting's<br />per-creative CTR histogram.<br />(pkg/optimise/bandit.go)</div>"]
-        style 50 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 50 fill:#16a34a,stroke:#12863d,color:#ffffff
         51["<div style='font-weight: bold'>Warm Cache Supervisor</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Creative-metadata +<br />freq-cap-rule warm caches:<br />NATS-invalidate + poll +<br />self-healing Postgres loader.<br />(pkg/cache/warm)</div>"]
-        style 51 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 51 fill:#16a34a,stroke:#12863d,color:#ffffff
         52["<div style='font-weight: bold'>Event Publisher</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Async NATS publish of<br />render_failed +<br />freq_cap_blocked (disk-spool<br />fallback).<br />(cmd/adserver/main.go,<br />pkg/events)</div>"]
-        style 52 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 52 fill:#16a34a,stroke:#12863d,color:#ffffff
       end
 
       145[("<div style='font-weight: bold'>PostgreSQL</div><div style='font-size: 70%; margin-top: 0px'>[Container: PostgreSQL]</div><div style='font-size: 80%; margin-top:10px'>Transactional store,<br />multi-tenant via RLS<br />(adtech_app NOBYPASSRLS).</div>")]
@@ -38,9 +38,9 @@ graph LR
       149[("<div style='font-weight: bold'>Object Storage</div><div style='font-size: 70%; margin-top: 0px'>[Container: S3]</div><div style='font-size: 80%; margin-top:10px'>Creatives + the Parquet/Delta<br />lake (Minio local / S3 prod).</div>")]
       style 149 fill:#438dd5,stroke:#2e6295,color:#ffffff
       18["<div style='font-weight: bold'>SSP</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Supply-side: publisher<br />inventory, builds bid<br />requests, resolves + stamps<br />audience segments<br />(consent-gated).</div>"]
-      style 18 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 18 fill:#2563eb,stroke:#1e4fc2,color:#ffffff
       85["<div style='font-weight: bold'>Reporting + Billing</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Consumes NATS events →<br />ClickHouse; query API;<br />in-process billing engine<br />(reserve/settle,<br />TigerBeetle); hourly Parquet<br />export.</div>"]
-      style 85 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 85 fill:#4f46e5,stroke:#413abd,color:#ffffff
     end
 
     18-. "<div>Behaviour observed / data-fee</div><div style='font-size: 70%'></div>" .->148

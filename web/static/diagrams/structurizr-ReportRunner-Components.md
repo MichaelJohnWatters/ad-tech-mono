@@ -12,26 +12,26 @@ graph LR
       style 9 fill:#ffffff,stroke:#0b4884,color:#0b4884
 
       subgraph 115 ["Report Runner"]
-        style 115 fill:#ffffff,stroke:#0b4884,color:#0b4884
+        style 115 fill:#ffffff,stroke:#5255c7,color:#5255c7
 
         116["<div style='font-weight: bold'>Schedule Enqueuer</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Loads due saved-report<br />schedules and enqueues them<br />as jobs.<br />(pkg/reportrunner/runner.go)</div>"]
-        style 116 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 116 fill:#6366f1,stroke:#5255c7,color:#ffffff
         117["<div style='font-weight: bold'>Job Queue Manager</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Claim/lease/heartbeat/reclaim<br />on report_jobs (SKIP LOCKED)<br />— multi-replica safe.<br />(pkg/reportjobs/store.go)</div>"]
-        style 117 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 117 fill:#6366f1,stroke:#5255c7,color:#ffffff
         118["<div style='font-weight: bold'>Report Renderer</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Renders query results to CSV<br />/ JSON / Parquet (Arrow).<br />(pkg/reportjobs/formats.go,<br />executor.go)</div>"]
-        style 118 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 118 fill:#6366f1,stroke:#5255c7,color:#ffffff
         119["<div style='font-weight: bold'>Reporting HTTP Client</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Posts scoped report queries<br />to the reporting service;<br />routes segment exports.<br />(pkg/reportrunner/store.go)</div>"]
-        style 119 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 119 fill:#6366f1,stroke:#5255c7,color:#ffffff
         120["<div style='font-weight: bold'>Export Zip Builder</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Materialises a per-account<br />data-export zip<br />(campaigns/creatives/invoices/…).<br />(pkg/accountexport/builder.go)</div>"]
-        style 120 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 120 fill:#6366f1,stroke:#5255c7,color:#ffffff
         121["<div style='font-weight: bold'>Email Notifier</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Sends download-link emails on<br />completion (best-effort).<br />(pkg/email/email.go)</div>"]
-        style 121 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 121 fill:#6366f1,stroke:#5255c7,color:#ffffff
         122["<div style='font-weight: bold'>Artifact Store</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Uploads artifacts + export<br />zips to the private<br />adtech-reports bucket.<br />(pkg/store/objects)</div>"]
-        style 122 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 122 fill:#6366f1,stroke:#5255c7,color:#ffffff
         123["<div style='font-weight: bold'>Stale-Lease Sweeper</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Reclaims lapsed leases back<br />to queued; GCs expired<br />artifacts.<br />(pkg/reportjobs/sweeper.go)</div>"]
-        style 123 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 123 fill:#6366f1,stroke:#5255c7,color:#ffffff
         124["<div style='font-weight: bold'>Tenant Scope Resolver</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Forces account/publisher<br />scope at enqueue for<br />schedule-driven jobs.<br />(pkg/reportjobs/scope.go)</div>"]
-        style 124 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 124 fill:#6366f1,stroke:#5255c7,color:#ffffff
       end
 
       145[("<div style='font-weight: bold'>PostgreSQL</div><div style='font-size: 70%; margin-top: 0px'>[Container: PostgreSQL]</div><div style='font-size: 80%; margin-top:10px'>Transactional store,<br />multi-tenant via RLS<br />(adtech_app NOBYPASSRLS).</div>")]
@@ -39,7 +39,7 @@ graph LR
       149[("<div style='font-weight: bold'>Object Storage</div><div style='font-size: 70%; margin-top: 0px'>[Container: S3]</div><div style='font-size: 80%; margin-top:10px'>Creatives + the Parquet/Delta<br />lake (Minio local / S3 prod).</div>")]
       style 149 fill:#438dd5,stroke:#2e6295,color:#ffffff
       85["<div style='font-weight: bold'>Reporting + Billing</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Consumes NATS events →<br />ClickHouse; query API;<br />in-process billing engine<br />(reserve/settle,<br />TigerBeetle); hourly Parquet<br />export.</div>"]
-      style 85 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 85 fill:#4f46e5,stroke:#413abd,color:#ffffff
     end
 
     85-. "<div>Invoices, balances, committed<br />spend</div><div style='font-size: 70%'></div>" .->145

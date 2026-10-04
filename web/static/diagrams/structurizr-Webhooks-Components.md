@@ -9,22 +9,22 @@ graph LR
       style 9 fill:#ffffff,stroke:#0b4884,color:#0b4884
 
       subgraph 125 ["Webhooks"]
-        style 125 fill:#ffffff,stroke:#0b4884,color:#0b4884
+        style 125 fill:#ffffff,stroke:#934407,color:#934407
 
         126["<div style='font-weight: bold'>NATS Event Consumer</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Subscribes to account-scoped<br />subjects (budget/balance<br />depleted, campaign state,<br />enrolled, report done);<br />retry-until-stick.<br />(cmd/webhooks/main.go)</div>"]
-        style 126 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 126 fill:#b45309,stroke:#934407,color:#ffffff
         127["<div style='font-weight: bold'>Event Router</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Maps NATS subjects → customer<br />event names, extracts<br />account_id, drops poison.<br />(cmd/webhooks/main.go)</div>"]
-        style 127 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 127 fill:#b45309,stroke:#934407,color:#ffffff
         128["<div style='font-weight: bold'>Dispatcher</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Looks up subscriptions, wraps<br />the self-describing envelope,<br />fans out per endpoint.<br />(pkg/webhooks/webhooks.go)</div>"]
-        style 128 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 128 fill:#b45309,stroke:#934407,color:#ffffff
         129["<div style='font-weight: bold'>Subscription Store</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Reads active webhook<br />subscriptions for<br />account+event (RLS-scoped).<br />(pkg/webhooks/store_postgres.go)</div>"]
-        style 129 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 129 fill:#b45309,stroke:#934407,color:#ffffff
         130["<div style='font-weight: bold'>HTTP Delivery Client</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>POSTs the signed envelope<br />with exponential-backoff<br />retries.<br />(pkg/webhooks/webhooks.go)</div>"]
-        style 130 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 130 fill:#b45309,stroke:#934407,color:#ffffff
         131["<div style='font-weight: bold'>Payload Signer</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>HMAC-SHA256 of the body into<br />X-Adtech-Signature.<br />(pkg/webhooks/webhooks.go)</div>"]
-        style 131 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 131 fill:#b45309,stroke:#934407,color:#ffffff
         132["<div style='font-weight: bold'>Delivery Log</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Records each delivery attempt<br />to webhook_deliveries for<br />audit.<br />(pkg/webhooks/store_postgres.go)</div>"]
-        style 132 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 132 fill:#b45309,stroke:#934407,color:#ffffff
       end
 
       145[("<div style='font-weight: bold'>PostgreSQL</div><div style='font-size: 70%; margin-top: 0px'>[Container: PostgreSQL]</div><div style='font-size: 80%; margin-top:10px'>Transactional store,<br />multi-tenant via RLS<br />(adtech_app NOBYPASSRLS).</div>")]

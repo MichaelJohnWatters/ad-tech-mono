@@ -26,19 +26,19 @@ graph LR
       style 9 fill:#ffffff,stroke:#0b4884,color:#0b4884
 
       10["<div style='font-weight: bold'>Gateway</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Auth (JWT/SSO/API-key), RBAC,<br />HTMX portals, REST API, proxy<br />to internal gRPC.</div>"]
-      style 10 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 10 fill:#0d9488,stroke:#0b7268,color:#ffffff
       100["<div style='font-weight: bold'>Identity Consumer</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Builds the identity graph<br />from observed IDs<br />(deterministic +<br />probabilistic).</div>"]
-      style 100 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 100 fill:#c026d3,stroke:#9e20ae,color:#ffffff
       107["<div style='font-weight: bold'>Audience RT</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Real-time retargeting: enroll<br />on site-visit, suppress on<br />purchase.</div>"]
-      style 107 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 107 fill:#a21caf,stroke:#851790,color:#ffffff
       115["<div style='font-weight: bold'>Report Runner</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Async report jobs (SKIP<br />LOCKED queue) → CSV/Parquet<br />in object storage; export<br />zips.</div>"]
-      style 115 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 115 fill:#6366f1,stroke:#5255c7,color:#ffffff
       125["<div style='font-weight: bold'>Webhooks</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Delivers business events to<br />registered partner URLs.</div>"]
-      style 125 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 125 fill:#b45309,stroke:#934407,color:#ffffff
       133["<div style='font-weight: bold'>Notifications</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>In-app portal notifications<br />(the bell).</div>"]
-      style 133 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 133 fill:#d97706,stroke:#b36205,color:#ffffff
       137["<div style='font-weight: bold'>Batch Conductor</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go (CronJob)]</div><div style='font-size: 80%; margin-top:10px'>Hourly completion-ordered<br />data chain: rollups → export<br />→ profile-builder → privacy<br />purge.</div>"]
-      style 137 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 137 fill:#155e75,stroke:#114d60,color:#ffffff
       145[("<div style='font-weight: bold'>PostgreSQL</div><div style='font-size: 70%; margin-top: 0px'>[Container: PostgreSQL]</div><div style='font-size: 80%; margin-top:10px'>Transactional store,<br />multi-tenant via RLS<br />(adtech_app NOBYPASSRLS).</div>")]
       style 145 fill:#438dd5,stroke:#2e6295,color:#ffffff
       146[("<div style='font-weight: bold'>Redis</div><div style='font-size: 70%; margin-top: 0px'>[Container: Redis]</div><div style='font-size: 80%; margin-top:10px'>L2: budget/freq-cap counters,<br />audience sets, sessions, rate<br />limits.</div>")]
@@ -52,25 +52,25 @@ graph LR
       150[("<div style='font-weight: bold'>TigerBeetle</div><div style='font-size: 70%; margin-top: 0px'>[Container: TigerBeetle]</div><div style='font-size: 80%; margin-top:10px'>Double-entry billing ledger<br />(spend reserve/settle).</div>")]
       style 150 fill:#438dd5,stroke:#2e6295,color:#ffffff
       18["<div style='font-weight: bold'>SSP</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Supply-side: publisher<br />inventory, builds bid<br />requests, resolves + stamps<br />audience segments<br />(consent-gated).</div>"]
-      style 18 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 18 fill:#2563eb,stroke:#1e4fc2,color:#ffffff
       27["<div style='font-weight: bold'>Exchange</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Runs the auction, DSP<br />fan-out, deal priority<br />(PG>Preferred>PMP>Open),<br />win/loss notices (price +<br />clear_price).</div>"]
-      style 27 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 27 fill:#ea580c,stroke:#c2490a,color:#ffffff
       36["<div style='font-weight: bold'>DSP</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Demand-side: campaign<br />eligibility, targeting,<br />bidding, budget/pacing, bid<br />shading.</div>"]
-      style 36 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 36 fill:#7c3aed,stroke:#6530c4,color:#ffffff
       44["<div style='font-weight: bold'>Ad Server</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Creative decisioning +<br />serving, frequency capping,<br />HMAC-signed tracking macros.</div>"]
-      style 44 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 44 fill:#16a34a,stroke:#12863d,color:#ffffff
       53["<div style='font-weight: bold'>Publisher Ad Server</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Direct-sold vs programmatic<br />arbitration per slot<br />(GAM-like) + Prebid fan-out +<br />guaranteed pacing.</div>"]
-      style 53 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 53 fill:#0369a1,stroke:#025685,color:#ffffff
       62["<div style='font-weight: bold'>Tracker</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Impression/click/conversion/view<br />beacons, real-time fraud<br />checks, publishes events.</div>"]
-      style 62 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 62 fill:#dc2626,stroke:#b61f1f,color:#ffffff
       71["<div style='font-weight: bold'>SSAI Stitcher</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Server-side ad insertion into<br />HLS/DASH manifests, signed<br />segment beacons.</div>"]
-      style 71 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 71 fill:#db2777,stroke:#b52062,color:#ffffff
       79["<div style='font-weight: bold'>Transcoder</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Cache-first ad conditioning<br />(ffmpeg) to<br />content-compatible HLS for<br />SSAI.</div>"]
-      style 79 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 79 fill:#be185d,stroke:#9c144c,color:#ffffff
       85["<div style='font-weight: bold'>Reporting + Billing</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Consumes NATS events →<br />ClickHouse; query API;<br />in-process billing engine<br />(reserve/settle,<br />TigerBeetle); hourly Parquet<br />export.</div>"]
-      style 85 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 85 fill:#4f46e5,stroke:#413abd,color:#ffffff
       94["<div style='font-weight: bold'>Pipeline</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Publisher-file ingest,<br />audience membership<br />cache-writer (single writer),<br />batch-conductor chain.</div>"]
-      style 94 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 94 fill:#0891b2,stroke:#067793,color:#ffffff
     end
 
     1-. "<div>Campaigns, audiences,<br />reports, bid-shading view<br />(HTTPS)</div><div style='font-size: 70%'></div>" .->10

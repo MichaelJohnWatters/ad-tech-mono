@@ -9,22 +9,22 @@ graph LR
       style 9 fill:#ffffff,stroke:#0b4884,color:#0b4884
 
       subgraph 36 ["DSP"]
-        style 36 fill:#ffffff,stroke:#0b4884,color:#0b4884
+        style 36 fill:#ffffff,stroke:#6530c4,color:#6530c4
 
         37["<div style='font-weight: bold'>Bid Handler</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Per-request bid loop: iterate<br />campaigns → eligibility →<br />pace → shade → bid.<br />(cmd/dsp/main.go)</div>"]
-        style 37 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 37 fill:#7c3aed,stroke:#6530c4,color:#ffffff
         38["<div style='font-weight: bold'>Targeting Engine</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Boolean include/exclude<br />expressions + stacked bid<br />modifiers. (pkg/targeting)</div>"]
-        style 38 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 38 fill:#7c3aed,stroke:#6530c4,color:#ffffff
         39["<div style='font-weight: bold'>Audience Lookup</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Segment membership via Redis<br />sets + identity-graph<br />expansion + household.<br />(cmd/dsp/identity.go,<br />pkg/audience)</div>"]
-        style 39 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 39 fill:#7c3aed,stroke:#6530c4,color:#ffffff
         40["<div style='font-weight: bold'>Bid Shading</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Win-rate curve per placement;<br />shade toward the<br />(second-price) clearing.<br />(pkg/bidshading)</div>"]
-        style 40 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 40 fill:#7c3aed,stroke:#6530c4,color:#ffffff
         41["<div style='font-weight: bold'>Warm Cache / Refresher</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>In-process L1 campaigns +<br />budgets + balances,<br />bulk-refreshed in background<br />(no hot-path I/O).<br />(cmd/dsp/refresh.go)</div>"]
-        style 41 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 41 fill:#7c3aed,stroke:#6530c4,color:#ffffff
         42["<div style='font-weight: bold'>Budget + Balance Gate</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>Spend meters + prepay gate;<br />reconciles to billing<br />snapshots. (cmd/dsp)</div>"]
-        style 42 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 42 fill:#7c3aed,stroke:#6530c4,color:#ffffff
         43["<div style='font-weight: bold'>Win/Loss Handler</div><div style='font-size: 70%; margin-top: 0px'>[Component: Go]</div><div style='font-size: 80%; margin-top:10px'>nurl handlers: budget record,<br />publish<br />AuctionLoss/AuctionShade,<br />feed shading curve.</div>"]
-        style 43 fill:#4a90d9,stroke:#336497,color:#ffffff
+        style 43 fill:#7c3aed,stroke:#6530c4,color:#ffffff
       end
 
       145[("<div style='font-weight: bold'>PostgreSQL</div><div style='font-size: 70%; margin-top: 0px'>[Container: PostgreSQL]</div><div style='font-size: 80%; margin-top:10px'>Transactional store,<br />multi-tenant via RLS<br />(adtech_app NOBYPASSRLS).</div>")]
@@ -34,7 +34,7 @@ graph LR
       148[("<div style='font-weight: bold'>NATS JetStream</div><div style='font-size: 70%; margin-top: 0px'>[Container: NATS]</div><div style='font-size: 80%; margin-top:10px'>Async event bus (JSON<br />payloads).</div>")]
       style 148 fill:#438dd5,stroke:#2e6295,color:#ffffff
       27["<div style='font-weight: bold'>Exchange</div><div style='font-size: 70%; margin-top: 0px'>[Container: Go]</div><div style='font-size: 80%; margin-top:10px'>Runs the auction, DSP<br />fan-out, deal priority<br />(PG>Preferred>PMP>Open),<br />win/loss notices (price +<br />clear_price).</div>"]
-      style 27 fill:#1168bd,stroke:#0b4884,color:#ffffff
+      style 27 fill:#ea580c,stroke:#c2490a,color:#ffffff
     end
 
     27-. "<div>AuctionWin / AuctionComplete<br />/ DSPCall</div><div style='font-size: 70%'></div>" .->148

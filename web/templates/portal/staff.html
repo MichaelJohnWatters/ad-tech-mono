@@ -867,12 +867,22 @@ make stack-down PURGE=1          # also drop PVCs (full wipe)</code></pre>
     <section id="section-architecture" class="portal-section p-6 space-y-6 hidden">
       {{ template "card-start" (dict "title" "Architecture diagrams") }}
       <p class="text-sm text-gray-500 dark:text-gray-400 mb-3">
-        Live system diagrams, rendered from <code class="px-1.5 py-0.5 rounded bg-surface-3 font-mono">docs/diagrams</code>
-        (kept fresh by <code class="px-1.5 py-0.5 rounded bg-surface-3 font-mono">make diagrams</code>).
-        Maps support scroll-wheel zoom + drag-pan; sequence diagrams render inline.
+        Two generations of diagrams: the <strong>C4 model</strong> (new — one Structurizr
+        source, <code class="px-1.5 py-0.5 rounded bg-surface-3 font-mono">docs/diagrams/workspace.dsl</code>,
+        exported by <code class="px-1.5 py-0.5 rounded bg-surface-3 font-mono">make c4</code>; each service keeps
+        one identity colour across every view) and the <strong>classic flow diagrams</strong>
+        (D2 + Mermaid, kept fresh by <code class="px-1.5 py-0.5 rounded bg-surface-3 font-mono">make diagrams</code>).
+        Maps and C4 views support scroll-wheel zoom + drag-pan; sequence diagrams render inline.
         See the index + "update when" legend in <code class="font-mono">docs/diagrams/README.md</code>.
       </p>
-      <div id="archChips" class="flex flex-wrap gap-2 mb-3"></div>
+      <style>
+        /* C4/mermaid edge labels: solid paper behind the text + dark ink so
+           relationship labels stay readable where dotted edges cross them. */
+        #archViewer .edgeLabel, #archViewer .edgeLabel .labelBkg, #archViewer .edgeLabel p { background:#ffffff !important; }
+        #archViewer .edgeLabel, #archViewer .edgeLabel div { color:#1e293b !important; }
+        #archViewer .edgeLabel { padding:1px 3px; border-radius:3px; }
+      </style>
+      <div id="archChips" class="space-y-2 mb-3"></div>
       <div id="archViewer" class="border border-gray-200 dark:border-gray-800 rounded-lg bg-white dark:bg-surface-3 overflow-auto" style="min-height:60vh">
         <div class="p-8 text-center text-sm text-gray-400">Loading…</div>
       </div>
@@ -2070,10 +2080,26 @@ async function loadArchitecture() {
     $('archViewer').innerHTML = `<div class="p-8 text-center text-sm text-error">could not load diagrams — ${esc(err.message)}</div>`;
     return;
   }
-  $('archChips').innerHTML = archManifest.map((d, i) =>
+  // Two generations, visually separated: the NEW C4 model (one Structurizr
+  // source) vs the classic D2/Mermaid flow diagrams.
+  const isC4 = d => (d.level || '').startsWith('C4');
+  const chip = (d, i) =>
     `<button data-i="${i}" class="arch-chip text-xs px-3 py-1.5 rounded-full border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800">
        <span class="text-gray-400 mr-1">${esc(d.level)}</span>${esc(d.title)}
-     </button>`).join('');
+     </button>`;
+  const section = (label, badge, chips) => chips ? `
+    <div>
+      <div class="flex items-center gap-2 mb-1.5">
+        <span class="text-[11px] font-semibold uppercase tracking-wider text-gray-400">${label}</span>${badge}
+        <span class="flex-1 border-t border-gray-200 dark:border-gray-800"></span>
+      </div>
+      <div class="flex flex-wrap gap-2">${chips}</div>
+    </div>` : '';
+  const c4Chips  = archManifest.map((d, i) => isC4(d) ? chip(d, i) : '').join('');
+  const oldChips = archManifest.map((d, i) => isC4(d) ? '' : chip(d, i)).join('');
+  $('archChips').innerHTML =
+    section('C4 model', '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-success/15 text-success">NEW</span>', c4Chips) +
+    section('Classic flow diagrams', '', oldChips);
   $('archChips').querySelectorAll('.arch-chip').forEach(b => b.addEventListener('click', () => renderDiagram(+b.dataset.i)));
   renderDiagram(0);
 }
@@ -2096,11 +2122,28 @@ async function renderDiagram(i) {
       }
     } else {
       const blocks = [...body.matchAll(/```mermaid\n([\s\S]*?)```/g)].map(m => m[1]);
+      const isC4 = (d.level || '').startsWith('C4');
       // Render on a white "paper" card so the default (dark-on-light) mermaid
       // theme stays high-contrast against the dark portal.
       v.innerHTML = '<div class="p-6 space-y-8 bg-white rounded-lg m-3 overflow-auto"></div>';
       const host = v.firstElementChild;
       if (!blocks.length) { host.innerHTML = '<div class="text-sm text-gray-400">no diagram blocks</div>'; return; }
+      if (isC4) {
+        // C4 drill-down hint + breadcrumb back up the layers:
+        // Context → Containers → <service> components.
+        const crumbs = ['<span class="text-gray-400">Drill down:</span>'];
+        const ctxI = archManifest.findIndex(m => m.file.includes('structurizr-Context'));
+        const conI = archManifest.findIndex(m => m.file.includes('structurizr-Containers'));
+        const crumb = (idx, label, here) => here
+          ? `<span class="font-semibold text-gray-700">${esc(label)}</span>`
+          : `<a href="#" data-i="${idx}" class="arch-crumb text-brand hover:underline">${esc(label)}</a>`;
+        crumbs.push(crumb(ctxI, 'Context', i === ctxI), '<span class="text-gray-300">▸</span>', crumb(conI, 'Containers', i === conI));
+        if (i !== ctxI && i !== conI) crumbs.push('<span class="text-gray-300">▸</span>', crumb(i, d.title.replace(/^C4 · /, ''), true));
+        host.insertAdjacentHTML('beforebegin',
+          `<div class="px-6 pt-4 -mb-4 text-xs flex items-center gap-1.5">${crumbs.join('')}
+             <span class="ml-3 text-gray-400">· click a coloured box to open its layer · scroll to zoom</span></div>`);
+        v.querySelectorAll('.arch-crumb').forEach(a => a.addEventListener('click', ev => { ev.preventDefault(); renderDiagram(+a.dataset.i); }));
+      }
       for (let k = 0; k < blocks.length; k++) {
         const cell = document.createElement('div');
         try {
@@ -2110,6 +2153,42 @@ async function renderDiagram(i) {
           cell.innerHTML = `<pre class="text-xs text-error whitespace-pre-wrap">mermaid error: ${esc(e.message)}</pre>`;
         }
         host.appendChild(cell);
+        if (isC4) {
+          // C4 views are big maps: give them the same fixed-height pan-zoom as
+          // the SVG diagrams (tiny fit-to-width text was unreadable), and wire
+          // the LAYERED drill-down — clicking a node whose name matches another
+          // C4 view opens that view (Context → Containers → components).
+          const svgEl = cell.querySelector('svg');
+          if (svgEl) {
+            cell.style.height = '70vh';
+            svgEl.style.maxWidth = 'none';
+            svgEl.setAttribute('width', '100%'); svgEl.setAttribute('height', '100%');
+            if (window.svgPanZoom) window.svgPanZoom(svgEl, { controlIconsEnabled: true, fit: true, center: true, minZoom: 0.2, maxZoom: 20 });
+            const norm = s => (s || '').toLowerCase().replace(/[^a-z]/g, '');
+            const conIdx = archManifest.findIndex(m => m.file.includes('structurizr-Containers'));
+            const targets = archManifest.map((m, j) => ({ j, name: norm((m.title || '').replace(/^C4 · /, '')) }))
+              .filter(t => t.j !== i && t.name && (archManifest[t.j].level || '').startsWith('C4'));
+            // Ignore the click that ends a pan drag: only a press that barely
+            // moved counts as a drill-down click.
+            let downAt = null;
+            svgEl.addEventListener('mousedown', e => { downAt = [e.clientX, e.clientY]; }, true);
+            const wasDrag = e => downAt && (Math.abs(e.clientX - downAt[0]) + Math.abs(e.clientY - downAt[1])) > 6;
+            svgEl.querySelectorAll('g.node').forEach(node => {
+              const bold = node.querySelector("div[style*='font-weight']");
+              const name = norm(bold && bold.textContent);
+              if (!name) return;
+              // The system box on the Context view drills into Containers.
+              let hit = (name === 'adtechplatform' && conIdx >= 0 && conIdx !== i) ? { j: conIdx }
+                : targets.find(t => name.startsWith(t.name) || t.name.startsWith(name));
+              if (!hit) return;
+              node.style.cursor = 'pointer';
+              node.addEventListener('click', e => { if (!wasDrag(e)) renderDiagram(hit.j); });
+              const title = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+              title.textContent = 'Open ' + archManifest[hit.j].title;
+              node.appendChild(title);
+            });
+          }
+        }
       }
     }
   } catch (err) {
