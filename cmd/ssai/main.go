@@ -1019,43 +1019,50 @@ func (d *stitcherDeps) runAuction(ctx context.Context, r *http.Request, channel 
 // never fires ad beacons itself (it doesn't know these are ads).
 func (d *stitcherDeps) segmentHandler(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
-	redir := q.Get("redir")
+	// The sensitive metadata — the pre-signed beacon(s) (which carry price,
+	// advertiser/creative ids, HMAC sig) and the real media to redirect to — rides
+	// in a single opaque AES-GCM token (?t=), never plaintext. See segtoken.go.
+	p, err := openSegToken(q.Get("t"))
+	if err != nil {
+		http.Error(w, "bad segment token", http.StatusBadRequest)
+		return
+	}
 	// beacon values are the pre-signed, HMAC-valid tracker URLs built at stitch
 	// time (a segment may carry several: the impression plus any quartiles it
 	// crosses). Firing them here (not reconstructing them) is what keeps SSAI's
 	// beacons identical to the ones the player would fire in the client-side flow.
-	// Fire each beacon ON this ad's distinct trace (the `ad` param, = the trace
-	// its auction/win spans use) so the tracker's impression + quartile spans
-	// join the ad in Jaeger instead of scattering onto the per-seg-request trace.
+	// Fire each beacon ON this ad's distinct trace (the `ad` param, = the trace its
+	// auction/win spans use) so the tracker's impression + quartile spans join the
+	// ad in Jaeger instead of scattering onto the per-seg-request trace.
 	// Still one distinct trace per ad, so no (impression, trace) dedup clash.
 	adTP := tracing.TraceparentForTraceID(q.Get("ad"))
-	for _, beacon := range q["beacon"] {
+	for _, beacon := range p.Beacons {
 		if beacon != "" {
 			d.fireBeaconTP(r.Context(), beacon, adTP)
 		}
 	}
-	if redir == "" {
+	if p.Redir == "" {
 		http.Error(w, "missing redir", http.StatusBadRequest)
 		return
 	}
-	http.Redirect(w, r, redir, http.StatusFound)
+	http.Redirect(w, r, p.Redir, http.StatusFound)
 }
 
 // segmentURL builds the manifest URI for one ad segment: a call back into this
-// service's segment beacon endpoint (via the browser-reachable public URL),
-// carrying the pre-signed beacon(s) to fire and the real media to redirect to.
-// events is kept as a plain param for readability/debugging of the manifest.
+// service's segment endpoint (via the browser-reachable public URL). The SENSITIVE
+// data — the pre-signed beacon(s) and the real media to redirect to — is SEALED
+// into an opaque token (?t=); the plaintext params (session/ad/break/seg) are just
+// opaque operational ids for correlation/debug. See segtoken.go.
 func (d *stitcherDeps) segmentURL(session, adTrace string, adIdx, n int, events, beacons []string, mediaURL string) string {
 	q := url.Values{}
 	q.Set("session", session)
 	q.Set("ad", adTrace)
 	q.Set("break", strconv.Itoa(adIdx))
 	q.Set("seg", strconv.Itoa(n))
-	if len(events) > 0 {
-		q.Set("event", strings.Join(events, ","))
+	// Seal the beacons + redirect (the only client-sensitive bits) into ?t=.
+	if tok, err := sealSegToken(segPayload{Events: events, Beacons: beacons, Redir: mediaURL}); err == nil {
+		q.Set("t", tok)
 	}
-	q["beacon"] = beacons
-	q.Set("redir", mediaURL)
 	// TrimRight the public URL (siblings do the same): a trailing-slash
 	// ssai.public_url would otherwise yield a //v1/ssai/seg double slash.
 	return strings.TrimRight(d.publicURL, "/") + routes.SSAISegment + "?" + q.Encode()
