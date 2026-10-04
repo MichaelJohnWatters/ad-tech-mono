@@ -14,7 +14,8 @@ Server-side ad insertion (:8093). Sits between the video/audio player and the or
 
 HTTP (see `pkg/routes/routes.go`, "SSAI Stitcher"):
 - `GET /v1/ssai/manifest.m3u8` / `manifest.mpd` - player-facing stitch endpoint (`?origin=`, `?channel=audio`, `?rung=`, `?format=mpd`)
-- `GET /v1/ssai/seg` - per-ad-segment beacon endpoint: fires the pre-signed `beacon` URLs server-side, 302-redirects to the real media
+- `GET /v1/ssai/seg` (exact) - VOD/DASH per-ad-segment endpoint: opens the opaque `?t=` token, fires the sealed `beacon` URLs server-side, 302-redirects to the real media
+- `GET /v1/ssai/seg/<token>/seg_N.ts` (subtree) - LIVE uniform-chunk endpoint (`segmentProxyHandler`): serves BOTH content and ad chunks under one identical opaque path, STREAMED back 200 (no 302, no content/cond path on the wire) so a network-tab observer can't tell ads from content. Ad tokens fire beacons first; content tokens carry none. Token is deterministic (`segtoken.go`) → stable URL per slot across the live re-polls (else playback re-downloads each poll)
 - `GET /v1/ssai/content.m3u8` - built-in sample origin (video + audio variants) for the demo
 - `/healthz`, `/readyz`, `/metrics` (custom `adtech_ssai_*` counters/histogram: break fill outcomes, conditioning cache hit/miss, pod depth, ad seconds — `metrics.go`)
 

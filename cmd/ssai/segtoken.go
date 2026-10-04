@@ -3,12 +3,10 @@ package main
 import (
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 )
@@ -24,9 +22,10 @@ import (
 // segment index, exactly what a production SSAI opaque-token URL carries — and
 // reveal nothing about price or advertiser.
 type segPayload struct {
+	Ad      string   `json:"a,omitempty"` // ad trace id — forces the beacon traceparent (ads only)
 	Events  []string `json:"e,omitempty"`
-	Beacons []string `json:"k,omitempty"` // pre-signed, HMAC-valid tracker URLs
-	Redir   string   `json:"r,omitempty"` // the real conditioned ad media chunk
+	Beacons []string `json:"k,omitempty"` // pre-signed, HMAC-valid tracker URLs (ads only; empty = content)
+	Redir   string   `json:"r,omitempty"` // the real media chunk to stream/redirect to (content or ad)
 }
 
 // segKey derives the AES-256 key for segment tokens from the active beacon
@@ -59,10 +58,17 @@ func sealSegToken(p segPayload) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	nonce := make([]byte, aead.NonceSize())
-	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
-		return "", err
-	}
+	// DETERMINISTIC (synthetic) nonce = H(key ‖ plaintext) — so the SAME payload
+	// always seals to the SAME token. That's required for the live path: a given
+	// segment position must get a STABLE URL across the player's manifest re-polls,
+	// or it re-downloads every chunk each poll and playback stutters. GCM's
+	// nonce-reuse weakness only bites when the SAME nonce pairs with DIFFERENT
+	// plaintext; here identical payload → identical nonce → identical ciphertext
+	// (fine), and any different payload → different nonce (safe) — i.e. a standard
+	// SIV-style deterministic AEAD.
+	k := segKey()
+	sum := sha256.Sum256(append(append([]byte("ssai-seg-nonce\x00"), k[:]...), pt...))
+	nonce := sum[:aead.NonceSize()]
 	ct := aead.Seal(nonce, nonce, pt, nil)
 	return base64.RawURLEncoding.EncodeToString(ct), nil
 }

@@ -129,7 +129,10 @@ func (d *stitcherDeps) liveManifestHandler(w http.ResponseWriter, r *http.Reques
 			ad := d.liveAdForBreak(ctx, r, channel, placement, breakOrd, adProfile, reqLog)
 			if len(ad) > 0 {
 				ad[0].Discontinuity = true
-				segs = append(segs, ad[0]) // one ad segment per live break slot
+				// Serve the ad as a uniform, opaque, self-streamed chunk — identical
+				// in shape to the content chunks below, so the network tab can't tell
+				// ads from content (true server-side insertion).
+				segs = append(segs, d.proxify(ad[0], t))
 				if oc, ok := liveOutcomeFor(placement, breakOrd); ok && oc.Result == adserving.OutcomeFill {
 					o := oc
 					windowOutcome = &o // later filled breaks overwrite → newest wins
@@ -139,7 +142,9 @@ func (d *stitcherDeps) liveManifestHandler(w http.ResponseWriter, r *http.Reques
 			// No ad/slate available → show content in the slot (never gap the stream).
 		}
 		cs := content[((t%len(content))+len(content))%len(content)]
-		segs = append(segs, ssai.Segment{Duration: cs.Duration, URI: cs.URI, Map: cs.Map, Discontinuity: disc})
+		// Content chunks go through the SAME uniform proxy URL as ads (streamed
+		// back 200), so every segment the player fetches is indistinguishable.
+		segs = append(segs, d.proxify(ssai.Segment{Duration: cs.Duration, URI: cs.URI, Map: cs.Map, Discontinuity: disc}, t))
 	}
 	if windowOutcome != nil {
 		adserving.SetOutcome(w, *windowOutcome)

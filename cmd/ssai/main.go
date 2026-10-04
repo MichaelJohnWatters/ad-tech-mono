@@ -181,6 +181,10 @@ func main() {
 	mux.HandleFunc(routes.SSAIManifestMPD, deps.manifestHandler) // DASH (same pipeline, MPD output)
 	mux.HandleFunc(routes.SSAILive, deps.liveManifestHandler)    // continuous live channel (sliding window)
 	mux.HandleFunc(routes.SSAISegment, deps.segmentHandler)
+	// Uniform live segments (content + ad look identical): /v1/ssai/seg/<token>/...
+	// streamed back 200 by segmentProxyHandler. The exact path above stays the VOD
+	// 302 endpoint; this subtree is the live path's indistinguishable-chunk serve.
+	mux.HandleFunc(routes.SSAISegment+"/", deps.segmentProxyHandler)
 
 	handler := tracing.HTTPMiddleware(constants.ServiceSSAI)(metrics.Wrap(middleware.CORS(mux)))
 	server := &http.Server{Addr: ":" + port, Handler: handler, ReadTimeout: 5 * time.Second, WriteTimeout: 15 * time.Second}
@@ -1066,6 +1070,104 @@ func (d *stitcherDeps) segmentURL(session, adTrace string, adIdx, n int, events,
 	// TrimRight the public URL (siblings do the same): a trailing-slash
 	// ssai.public_url would otherwise yield a //v1/ssai/seg double slash.
 	return strings.TrimRight(d.publicURL, "/") + routes.SSAISegment + "?" + q.Encode()
+}
+
+// liveSegURI wraps ONE segment — content OR ad — as a uniform, opaque, path-style
+// URL this stitcher serves itself: /v1/ssai/seg/<token>/seg_<n>.ts. Every chunk
+// the live player fetches has this identical shape and is streamed back 200 (no
+// 302, no underlying content/cond path on the wire), so a network-tab observer
+// can't tell an ad from content — true server-side insertion. The token is
+// DETERMINISTIC (segtoken.go) so a given slot keeps a STABLE URL across the
+// player's manifest re-polls (else every poll re-downloads the window). It
+// carries the real source to stream and, for ads, the beacons to fire. Falls back
+// to the raw src if sealing fails (still plays, just not uniform).
+func (d *stitcherDeps) liveSegURI(n int, src, adTrace string, beacons []string) string {
+	if src == "" {
+		return src
+	}
+	tok, err := sealSegToken(segPayload{Ad: adTrace, Beacons: beacons, Redir: src})
+	if err != nil {
+		return src
+	}
+	return strings.TrimRight(d.publicURL, "/") + routes.SSAISegment + "/" + tok + "/seg_" + strconv.Itoa(n) + ".ts"
+}
+
+// proxify rewrites a just-built live segment into the uniform liveSegURI form. The
+// input is either a direct content URL or the query-style ad URL adSegments
+// produced (?...&t=<token>); either way we end up with one indistinguishable
+// /v1/ssai/seg/<token>/seg_<n>.ts. n = the segment's live-timeline position (keeps
+// the filename unique per slot). Preserves Duration/Map/Discontinuity.
+func (d *stitcherDeps) proxify(seg ssai.Segment, n int) ssai.Segment {
+	src, adTrace := seg.URI, ""
+	var beacons []string
+	if strings.Contains(seg.URI, routes.SSAISegment+"?") { // an ad segment from adSegments
+		if u, err := url.Parse(seg.URI); err == nil {
+			adTrace = u.Query().Get("ad")
+			if p, e := openSegToken(u.Query().Get("t")); e == nil {
+				src, beacons = p.Redir, p.Beacons
+			}
+		}
+	}
+	seg.URI = d.liveSegURI(n, src, adTrace, beacons)
+	return seg
+}
+
+// segmentProxyHandler serves the uniform live segments (/v1/ssai/seg/<token>/...).
+// Unlike segmentHandler (the VOD 302-redirect endpoint), this STREAMS the real
+// .ts bytes back itself — so content and ad chunks are byte-for-byte the same
+// request shape on the wire (no redirect, no content/cond path leak). For an ad it
+// fires the server-side beacons first (on the ad's trace); content carries none.
+func (d *stitcherDeps) segmentProxyHandler(w http.ResponseWriter, r *http.Request) {
+	rest := strings.TrimPrefix(r.URL.Path, routes.SSAISegment+"/")
+	tok := rest
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		tok = rest[:i]
+	}
+	p, err := openSegToken(tok)
+	if err != nil {
+		http.Error(w, "bad segment token", http.StatusBadRequest)
+		return
+	}
+	if len(p.Beacons) > 0 { // ad segment → fire beacons server-side on the ad's trace
+		adTP := tracing.TraceparentForTraceID(p.Ad)
+		for _, beacon := range p.Beacons {
+			if beacon != "" {
+				d.fireBeaconTP(r.Context(), beacon, adTP)
+			}
+		}
+	}
+	if p.Redir == "" {
+		http.Error(w, "missing source", http.StatusBadRequest)
+		return
+	}
+	d.streamSegment(w, r, p.Redir)
+}
+
+// streamSegment copies the real segment bytes to the client — from the object
+// store for a /v1/creatives/* source (the in-cluster stitcher can't reach the
+// browser gateway host), else over HTTP. Keeps the underlying path off the wire.
+func (d *stitcherDeps) streamSegment(w http.ResponseWriter, r *http.Request, src string) {
+	w.Header().Set("Content-Type", "video/mp2t")
+	w.Header().Set("Cache-Control", "no-store")
+	if key := creativesStoreKey(src); key != "" && d.store != nil {
+		if rc, err := d.store.Get(r.Context(), d.bucket, key); err == nil {
+			defer rc.Close()
+			_, _ = io.Copy(w, rc)
+			return
+		}
+	}
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, src, nil)
+	if err != nil {
+		http.Error(w, "segment unavailable", http.StatusBadGateway)
+		return
+	}
+	resp, err := d.client.Do(req)
+	if err != nil {
+		http.Error(w, "segment unavailable", http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	_, _ = io.Copy(w, resp.Body)
 }
 
 // fireBeacon fires a tracker beacon server-side with a browser-shaped UA so the
