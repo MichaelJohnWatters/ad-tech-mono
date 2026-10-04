@@ -90,8 +90,11 @@ http://shop.adtech.local (external advertiser site with the real pixel):
 
 The CRM onboarding story — "bring your own customers":
 
-1. Advertiser portal → **Audiences** → create a first-party audience and
-   upload the CSV (hashed emails / user ids) — the "diamond intenders" list.
+1. Advertiser portal (log in as `lumi-re-diamonds@adtech.local` / `admin`) →
+   **Audiences** → create a first-party audience and upload the CSV (hashed
+   emails / user ids) — the "diamond intenders" list:
+   `profiles/audiences/diamond-intenders.csv` (first row is the seeded persona's
+   hash, so it resolves live; see `profiles/audiences/README.md`).
 2. Show the audience built (member count).
 3. Target it: campaign → include that segment.
 4. Visit a demo site as a matching user → the ad serves, and the trace panel /
