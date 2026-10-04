@@ -2097,9 +2097,14 @@ async function loadArchitecture() {
     </div>` : '';
   const c4Chips  = archManifest.map((d, i) => isC4(d) ? chip(d, i) : '').join('');
   const oldChips = archManifest.map((d, i) => isC4(d) ? '' : chip(d, i)).join('');
+  // Two LENSES, not two generations: the C4 model is structure (what exists,
+  // what talks to what — drill Context → Containers → components), the flow
+  // diagrams are behaviour (what happens over time for one request / event /
+  // dollar). C4 superseded the old structural D2 maps; the flows it can't
+  // express stay.
   $('archChips').innerHTML =
-    section('C4 model', '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-success/15 text-success">NEW</span>', c4Chips) +
-    section('Classic flow diagrams', '', oldChips);
+    section('Structure — C4 model', '<span class="text-[10px] font-bold px-1.5 py-0.5 rounded bg-success/15 text-success">NEW</span>', c4Chips) +
+    section('Behaviour — flows &amp; sequences (one request / event / dollar over time)', '', oldChips);
   $('archChips').querySelectorAll('.arch-chip').forEach(b => b.addEventListener('click', () => renderDiagram(+b.dataset.i)));
   renderDiagram(0);
 }
@@ -2139,8 +2144,10 @@ async function renderDiagram(i) {
           : `<a href="#" data-i="${idx}" class="arch-crumb text-brand hover:underline">${esc(label)}</a>`;
         crumbs.push(crumb(ctxI, 'Context', i === ctxI), '<span class="text-gray-300">▸</span>', crumb(conI, 'Containers', i === conI));
         if (i !== ctxI && i !== conI) crumbs.push('<span class="text-gray-300">▸</span>', crumb(i, d.title.replace(/^C4 · /, ''), true));
-        host.insertAdjacentHTML('beforebegin',
-          `<div class="px-6 pt-4 -mb-4 text-xs flex items-center gap-1.5">${crumbs.join('')}
+        // Inside the white card (first row), so the rendered diagram can never
+        // sit on top of the navigation controls.
+        host.insertAdjacentHTML('afterbegin',
+          `<div class="text-xs flex items-center gap-1.5 flex-wrap border-b border-gray-100 pb-3">${crumbs.join('')}
              <span class="ml-3 text-gray-400">· click a coloured box to open its layer · scroll to zoom</span></div>`);
         v.querySelectorAll('.arch-crumb').forEach(a => a.addEventListener('click', ev => { ev.preventDefault(); renderDiagram(+a.dataset.i); }));
       }
