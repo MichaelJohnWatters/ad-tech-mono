@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 #
-# demo-forward.sh — bridge the host to the Rancher/k3s cluster for the demo.
+# demo-forward.sh — bridge the host to the Rancher/k3s cluster for SETUP / TOOLING.
 #
-# On Rancher Desktop the adtech services are ClusterIP, so the host can't reach
-# them on localhost the way it could under Tilt. The host-side demo tools
-# (scripts/demo.sh, cmd/demosite, cmd/simulator, cmd/prewarm, scripts/ssai-smoke.sh)
-# still expect the canonical localhost:<port> map — so this recreates it with
-# kubectl port-forward. Run in its OWN terminal; Ctrl-C tears every tunnel down.
+# SETUP/TOOLING ONLY — you do NOT need this to browse or record the demo. Every
+# browser-facing surface (all demo sites incl. Twitchr/SSAI ads + click-throughs,
+# the portal, the shop, trackers) works through the https://*.adtech.local ingress
+# with no bridge. This exists purely so HOST-SIDE CLI TOOLS that hardcode
+# localhost:<port> can reach the ClusterIP services: scripts/demo.sh / demo-setup.sh,
+# cmd/simulator (make traffic / loadtest), cmd/prewarm, the e2e suite, ssai-smoke.sh.
+# Run in its OWN terminal; Ctrl-C tears every tunnel down.
 #
 #   make demo-forward      # this script  (leave running)
 #   make demo-setup        # in a second terminal

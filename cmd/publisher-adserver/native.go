@@ -83,7 +83,7 @@ func nativeHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stub
 				// base on an HTTPS ingress request so the card's <img> srcs don't
 				// trip mixed-content. No-op otherwise.
 				rehostNativeAssets(r, &resp, secureBase)
-				macroCtx = nativeMacroCtx(winner, beaconBase, resp.Native.Link.URL)
+				macroCtx = nativeMacroCtx(winner, beaconBase, resp.Native.Link.URL, secureBase)
 				reqLog.Info("native bid served",
 					"trace_id", winner.TraceID,
 					"creative", winner.CreativeID,
@@ -165,10 +165,10 @@ func rehostNativeAssets(r *http.Request, resp *native.Response, secureBase strin
 // nativeMacroCtx builds the signing context for a native winner. LandingURL
 // comes from the native response's link (falling back to the advertiser's demo
 // landing page) so the signed click tracker redirects there.
-func nativeMacroCtx(winner *sspVideoWinner, trackerURL, linkURL string) adserving.MacroContext {
+func nativeMacroCtx(winner *sspVideoWinner, trackerURL, linkURL, secureBase string) adserving.MacroContext {
 	landing := linkURL
 	if landing == "" {
-		landing = landingForDomain(winner.AdvertiserDomain)
+		landing = landingForDomain(secureBase, winner.AdvertiserDomain)
 	}
 	return adserving.MacroContext{
 		AuctionID:    defaultStr2(winner.TraceID, "native"),
