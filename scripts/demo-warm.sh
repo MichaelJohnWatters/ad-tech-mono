@@ -79,9 +79,7 @@ cat <<EOF
      https://adtech.local/login   →  admin@adtech.local / admin
      https://viewtube.adtech.local  https://twitchr.adtech.local  (+ soundwave/primereel/chronicle/gadget)
 
-  NOTE: SSAI *ad-segment* URLs + VAST click-throughs use SSAI_PUBLIC_URL / the click
-  base, which default to http://localhost:8080. Impressions, quartiles, media files
-  and SSAI *content* segments are all on gateway.adtech.local. For those two localhost
-  bits to resolve in a standalone browser, either run 'make demo-forward', or set
-  SSAI_PUBLIC_URL (+ click base) to https://gateway.adtech.local via helm.
+  No 'make demo-forward' bridge needed to browse — SSAI ad segments now resolve on
+  gateway.adtech.local too (SSAI_PUBLIC_URL / TRANSCODER_PUBLIC_BASE point at the public
+  gateway). demo-forward is ONLY for host CLI tools / e2e that hardcode localhost ports.
 EOF

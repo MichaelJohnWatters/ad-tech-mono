@@ -3,10 +3,25 @@
 package harness
 
 import (
+	"crypto/tls"
 	"io"
 	"net/http"
 	"time"
 )
+
+// insecureBase clones the default transport but skips TLS verification so the
+// harness can fetch the local stack's self-signed https://*.adtech.local URLs —
+// e.g. the SSAI ad-segment / conditioned-segment URLs the stitcher now emits on
+// the public gateway host (SSAI_PUBLIC_URL / TRANSCODER_PUBLIC_BASE). Local test
+// code only; never ships in a service.
+var insecureBase = func() http.RoundTripper {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	if t.TLSClientConfig == nil {
+		t.TLSClientConfig = &tls.Config{}
+	}
+	t.TLSClientConfig.InsecureSkipVerify = true
+	return t
+}()
 
 // retryTransport retries transport-level failures — connection refused / EOF /
 // reset when the port-forward tunnel to a service flaps because a pod is
@@ -36,7 +51,7 @@ type retryTransport struct{ base http.RoundTripper }
 func (rt retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	base := rt.base
 	if base == nil {
-		base = http.DefaultTransport
+		base = insecureBase
 	}
 	const attempts = 3
 	var resp *http.Response

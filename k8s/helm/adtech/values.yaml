@@ -1137,7 +1137,13 @@ services:
       - name: SSAI_TRACKER_URL
         value: "http://tracker:8083"
       - name: SSAI_PUBLIC_URL
-        value: "http://localhost:8080"
+        # Browser-reachable origin the stitched manifest points ad segments at.
+        # The public gateway (proxies /v1/ssai → ssai), so the branded-domain demo
+        # (https://twitchr.adtech.local) plays SSAI ads with NO `make demo-forward`
+        # bridge — localhost:8080 only resolved behind that bridge. gateway.adtech.local
+        # resolves both ways (browser via LB, host tools via /etc/hosts). Staging/prod
+        # overlays override with their own public gateway.
+        value: "https://gateway.adtech.local"
       - name: SSAI_TRANSCODER_URL
         value: "http://transcoder:8094"
       # Ad server the stitcher RECORDs the freq cap against on stitch (video
@@ -1181,7 +1187,10 @@ services:
       - name: TRANSCODER_BUCKET
         value: "adtech-creatives"
       - name: TRANSCODER_PUBLIC_BASE
-        value: "http://localhost:8080/v1/creatives"
+        # Browser-reachable base for conditioned ad segments the stitched manifest
+        # redirects to — public gateway so the branded-domain demo needs no bridge
+        # (see SSAI_PUBLIC_URL). Staging/prod overlays override.
+        value: "https://gateway.adtech.local/v1/creatives"
       - name: OTEL_ENDPOINT
         value: "jaeger:4318"
     resources:

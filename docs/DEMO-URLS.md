@@ -10,6 +10,12 @@ host tools / e2e that hardcode them (see the bottom table).
 > they are **not** shareable with anyone else (that needs the staging deploy — see
 > `docs/DEPLOY.md`).
 
+> **The `make demo-forward` bridge — you do NOT need it to browse / record the demo.**
+> Every browser-facing surface (all sites incl. Twitchr/SSAI ads, the portal, the shop,
+> trackers) works through the `*.adtech.local` domains above. `demo-forward` only exists
+> for **host CLI tools / e2e** that hardcode `localhost` ports (the bottom table) — don't
+> run it for a browser demo, and don't reach for `localhost:8080` URLs on camera.
+
 Source of truth for this list: `kubectl get ingress -A`.
 
 > **Nothing loads / can't log in?** The DB is probably bare (an e2e run or reset wipes
