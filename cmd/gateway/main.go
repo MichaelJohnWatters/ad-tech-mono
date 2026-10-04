@@ -1142,6 +1142,20 @@ func main() {
 			http.NotFound(w, r)
 			return
 		}
+		// Root is not a page — send the visitor where they actually want to go:
+		// a live session goes straight to its role's portal (dashboard); everyone
+		// else goes to the login form. (The old dev-tools landing lives at
+		// /dev-tools for anyone who still wants it.)
+		if claims, ok := middleware.ParseSession(r, signingKey); ok {
+			http.Redirect(w, r, portalHome(claims.AccountType), http.StatusSeeOther)
+			return
+		}
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+	})
+
+	// The old landing page (Publisher Simulator / Trace Explorer / Operator
+	// Console / Swagger shortcuts) kept at an explicit path for discoverability.
+	mux.HandleFunc("/dev-tools", func(w http.ResponseWriter, r *http.Request) {
 		templates.Render(w, "dashboard.html", nil)
 	})
 
