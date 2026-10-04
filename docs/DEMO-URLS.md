@@ -12,6 +12,12 @@ host tools / e2e that hardcode them (see the bottom table).
 
 Source of truth for this list: `kubectl get ingress -A`.
 
+> **Nothing loads / can't log in?** The DB is probably bare (an e2e run or reset wipes
+> it). Run **`make demo-warm`** — non-destructive: it (re)seeds, warms caches, packages
+> SSAI content, and prewarms ad conditioning so every format renders, then stops before
+> traffic. No `demo-forward` needed. (`make demo-setup` is the fuller path + traffic but
+> needs `demo-forward`; `make demo-reset` also works but wipes all three stores first.)
+
 ## Portal (customer + staff dashboard)
 
 | URL | What |
