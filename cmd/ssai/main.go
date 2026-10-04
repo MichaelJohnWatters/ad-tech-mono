@@ -772,7 +772,7 @@ func (d *stitcherDeps) fillBreak(ctx context.Context, r *http.Request, channel s
 		// Build the same MacroContext the publisher-adserver uses, so every beacon
 		// SSAI fires is the identical HMAC-signed URL the tracker expects (passes
 		// signature_validation, unlike a hand-rolled sig).
-		mc := macroCtxFor(winner, adTrace, d.trackerURL)
+		mc := macroCtxFor(winner, adTrace, d.trackerURL, channel)
 
 		// Cache-only conditioning: never block serving on ffmpeg.
 		cond := d.conditionCached(ctx, winner, adProfile, reqLog)
@@ -943,7 +943,7 @@ func (d *stitcherDeps) slateSegments(ctx context.Context, adProfile transcode.Pr
 		}
 		return nil
 	}
-	mc := macroCtxFor(winner, session, d.trackerURL)
+	mc := macroCtxFor(winner, session, d.trackerURL, constants.ChannelVideo)
 	return d.adSegments(cond, mc, constants.ChannelVideo, session, "slate-"+session, breakIdx, true)
 }
 
@@ -1137,7 +1137,7 @@ func eventsForSegment(start, segDur, total float64) []string {
 // macroCtxFor builds the beacon-signing context for a winner — the same shape
 // the publisher-adserver uses, so BuildImpressionURL / BuildVideoEventURL emit
 // the identical HMAC-signed tracker URLs the platform expects.
-func macroCtxFor(wn *sspWinner, adTrace, trackerURL string) adserving.MacroContext {
+func macroCtxFor(wn *sspWinner, adTrace, trackerURL, channel string) adserving.MacroContext {
 	cur := wn.Currency
 	if strings.TrimSpace(cur) == "" {
 		cur = "USD"
@@ -1159,7 +1159,12 @@ func macroCtxFor(wn *sspWinner, adTrace, trackerURL string) adserving.MacroConte
 		DealID:       "",
 		Width:        wn.Width,
 		Height:       wn.Height,
-		TrackerURL:   trackerURL,
-		URLTTL:       time.Hour,
+		// Channel rides into the impression/quartile beacons (setGeoDevice emits
+		// ch=) so SSAI plays land under their real channel (video/audio) instead
+		// of defaulting to display at the tracker. Without this the whole SSAI
+		// path mislabels every impression as display.
+		Channel:    channel,
+		TrackerURL: trackerURL,
+		URLTTL:     time.Hour,
 	}
 }

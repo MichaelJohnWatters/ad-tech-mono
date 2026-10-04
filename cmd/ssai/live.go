@@ -271,7 +271,7 @@ func (d *stitcherDeps) liveAdForBreak(ctx context.Context, r *http.Request, chan
 	winner := d.runAuction(ctx, r, channel, 0, traceparent, reqLog)
 	if winner != nil && !winner.NoBid && winner.MediaURL != "" {
 		if cond := d.conditionCached(ctx, winner, adProfile, reqLog); cond != nil && len(cond.Segments) > 0 {
-			mc := macroCtxFor(winner, adTrace, d.trackerURL)
+			mc := macroCtxFor(winner, adTrace, d.trackerURL, channel)
 			built := d.adSegments(cond, mc, channel, session, adTrace, breakOrd, false)
 			if len(built) > 0 {
 				result = built[:1] // one segment per live slot (impression rides seg 0)

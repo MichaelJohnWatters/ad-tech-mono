@@ -1039,7 +1039,7 @@ func TestSegmentHandlerFiresBeaconAndRedirects(t *testing.T) {
 	// Build the real signed beacon the stitcher would embed, so this test
 	// proves the handler fires a validatable URL (passes signature_validation),
 	// not a fake one.
-	mc := macroCtxFor(&sspWinner{CampaignID: "li-x", CreativeID: "cr-x", PlacementID: "pl-x", PublisherID: "pub-x"}, "trace-x", tracker.URL)
+	mc := macroCtxFor(&sspWinner{CampaignID: "li-x", CreativeID: "cr-x", PlacementID: "pl-x", PublisherID: "pub-x"}, "trace-x", tracker.URL, "video")
 	signed := adserving.BuildVideoEventURL(mc, "midpoint")
 
 	d := &stitcherDeps{trackerURL: tracker.URL, client: &http.Client{}}
