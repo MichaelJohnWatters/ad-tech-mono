@@ -139,6 +139,9 @@ reset: ## Wipe ALL data (Postgres+ClickHouse+Redis) then re-populate — a clean
 demo-reset: ## Reliable demo reset: in-cluster wipe+reseed + warm SSAI content/ad videos + verify the first-party-audience (Lumière) demo. Works after a plain run OR a PURGE teardown; no demo-forward needed.
 	bash scripts/demo-reset.sh
 
+demo-warm: ## Non-destructive: seed (UPSERT) + warm caches + SSAI content + prewarm an ALREADY-running stack to full browsability. No wipe, no demo-forward. STOPS before traffic (run a load test after). Use after an e2e left the DB bare.
+	bash scripts/demo-warm.sh
+
 traffic: ## Continuous simulator at a set speed (override with DEMO_RPS, default 5). Ctrl-C to stop.
 	go run ./cmd/simulator run --profile steady --duration 12h --rps $${DEMO_RPS:-5}
 
