@@ -120,22 +120,29 @@ kubectl -n adtech rollout restart deploy/dsp-internal
 
 (Reseeds/`make stack-up` revert 1 and 3-4 — re-run this block after either.)
 
-1. **BEFORE shot** (terminal): auction as the linked persona — a random
-   campaign wins at ~$9:
+**The on-camera flow — fully in the browser** (verified live; the demosite's
+persona bar is the identity):
+
+1. **Be the customer**: open http://chronicle.adtech.local — the persona bar
+   (bottom-left) shows `demo.shopper@example.com`. That email's sha256 IS the
+   CSV's matching row. **Accept personalized** on the consent banner and
+   scroll: normal ads (~$8-12 winners in the trace panel). **Say:** "the site
+   knows me as demo.shopper — watch what my ads look like BEFORE the jeweler
+   uploads their customer list." (This first visit also links my browser to
+   the hash in the identity graph — takes seconds.)
+2. **Upload**: advertiser portal (`lumi-re-diamonds@adtech.local` / `admin`)
+   → Audiences → "Diamond & Jewelry Intenders" (0 members) → upload
+   `diamond-intenders.csv` (Name field: exact segment name). 10 added,
+   1 matched — "hashed emails only; the platform never sees an address."
+3. **Get chased**: wait ~30s (buy-side caches refresh), reload chronicle →
+   **Lumière's ad renders for you**, and the trace panel shows the fill at
+   ~$60-72 vs the ~$9 field. Terminal alternative (same proof, raw JSON):
    ```sh
    curl -s "http://localhost:8084/v1/ssp/request?placement_id=pl-sim-mpu&geo=USA&device=desktop&user_id=pid-3efd27156f5ed4b7-2bb968a2-910a6cd5" | python3 -m json.tool | head -20
    ```
-2. Advertiser portal (`lumi-re-diamonds@adtech.local` / `admin`) →
-   **Audiences** → "Diamond & Jewelry Intenders" shows **0 members** → upload
-   `profiles/audiences/diamond-intenders.csv`. Response: 10 added, 1 matched
-   (match rate = fraction resolvable via the identity graph). **Say:** "hashed
-   ids only — the platform never sees raw emails."
-3. **AFTER shot** (~10s later, same curl): **Lumière wins at ~$60-70 CPM** —
-   the $40-base campaign crushes the ~$9 field because the visitor now
-   resolves, through the identity graph, to a member of my private list.
-4. **Say:** "my customer list never touched the bid request — no other bidder
-   ever saw it — but my campaign just outbid everyone for exactly the people
-   on it. Onboarding to winning, in seconds, end to end on this machine."
+4. **Say:** "my email never left my browser un-hashed, the list never rode a
+   bid request, no other bidder saw anything — but the jeweler just outbid
+   everyone, by 6x, for exactly the people on their customer list."
 
 Close on the Trace Explorer timeline for that win — the one-request story is
 the mic drop (the win shows the campaign + price; the ABSENCE of the private
