@@ -779,7 +779,16 @@ paths:
     post:
       tags: [Ad Serving]
       summary: Serve an ad creative with macro substitution
-      description: Called after auction win. Substitutes macros in creative HTML and generates tracking pixel URLs with full context.
+      description: >-
+        Called after auction win. Substitutes macros in creative HTML and
+        generates tracking pixel URLs with full context. The frequency cap is
+        decided+recorded BEFORE creative resolution. ServeRequest.adm_fallback
+        signals the caller holds the winner's bid.adm (an external display
+        bidder): on an unknown creative the response then carries
+        external_adm=true with the signed beacon URLs and NO html — the
+        caller (SSP) wraps the buyer's markup with them — instead of the
+        placeholder. Without adm_fallback an unknown creative keeps the
+        legacy placeholder + render-failed event.
       requestBody:
         required: true
         content:

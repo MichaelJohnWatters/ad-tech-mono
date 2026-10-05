@@ -1386,6 +1386,12 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 				bestBid.Protocol = openrtb.ProtocolVAST42
 			}
 		}
+		// Display §4.3: self-contained creatives carry their HTML in adm
+		// (macro-carrying / DPA / asset-hosted creatives stay CreativeID-only
+		// — the ad server assembles those at render time). Final winner only.
+		if reqFormat == "display" {
+			bestBid.AdM = displayAdMForBid(bestCampaign, bestBid.CrID)
+		}
 
 		resp := openrtb.BidResponse{
 			ID:  bidReq.ID,

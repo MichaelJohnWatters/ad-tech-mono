@@ -3840,7 +3840,9 @@
         // click/error — exactly what a real IMA/VAST integration reports.
         function fireVideoTracker(ad, event) {
             var urls = ad.trackers[event] || [];
-            urls.forEach(function(u){ fireBeacon(u, event); });
+            var v = document.getElementById('content-video');
+            var pos = v ? v.currentTime : 0;
+            urls.forEach(function(u){ fireBeacon(u, event, pos); });
             if (urls.length) logVideoEvent('Ad ' + event, '', event === 'skip' ? 'nobid' : '');
             return urls.length > 0;
         }
@@ -3911,7 +3913,7 @@
             var onPlay = function(){ if (started && !done) fireVideoTracker(ad, 'resume'); };
             var onVol = function(){ if (!started) return; fireVideoTracker(ad, (v.muted || v.volume === 0) ? 'mute' : 'unmute'); };
             var onFs = function(){ if (started) fireVideoTracker(ad, document.fullscreenElement ? 'fullscreen' : 'exitFullscreen'); };
-            var onError = function(){ ad.errors.forEach(function(u){ fireBeacon(u, 'error'); }); logVideoEvent('Ad playback error', ad.title, 'error'); finish(); };
+            var onError = function(){ ad.errors.forEach(function(u){ fireBeacon(u, 'error', v.currentTime, 405); }); logVideoEvent('Ad playback error', ad.title, 'error'); finish(); };
             var onEnded = function(){ fireVideoTracker(ad, 'complete'); logVideoEvent('Ad complete', ad.title, 'success'); finish(); };
 
             v.addEventListener('playing', onPlaying);
@@ -4097,10 +4099,25 @@
                 logVideoEvent('Audio error', String(err), 'error');
             });
         }
-        function fireBeacon(url, name) {
+        // Spec-player bracket-macro substitution (VAST 4.2 §6): the platform
+        // emits [CACHEBUSTING]/[TIMESTAMP]/[ADPLAYHEAD]/[ERRORCODE] as literal
+        // tokens OUTSIDE the HMAC; the player replaces them at fire time
+        // (same contract as adtech.js 2.1.0 / the demosite players).
+        function expandVastMacros(u, posSec, errorCode) {
+            if (!u || u.indexOf('[') === -1) return u;
+            function p2(n){ return (n < 10 ? '0' : '') + n; }
+            var s = Math.max(0, posSec || 0);
+            var pos = encodeURIComponent(p2(Math.floor(s/3600)) + ':' + p2(Math.floor(s/60)%60) + ':' + p2(Math.floor(s)%60) + '.' + ('00' + Math.round((s%1)*1000)).slice(-3));
+            return u.split('[CACHEBUSTING]').join(String(Math.floor(Math.random()*1e8)))
+                    .split('[TIMESTAMP]').join(encodeURIComponent(new Date().toISOString()))
+                    .split('[ADPLAYHEAD]').join(pos)
+                    .split('[CONTENTPLAYHEAD]').join(pos)
+                    .split('[ERRORCODE]').join(String(errorCode || 0));
+        }
+        function fireBeacon(url, name, posSec, errorCode) {
             if (!url) return;
             var img = new Image();
-            img.src = url;
+            img.src = expandVastMacros(url, posSec, errorCode);
             logVideoEvent('Audio beacon: ' + name, '', name === 'impression' ? 'success' : '');
             // Quartile/complete beacons fire during playback — seconds after the audio
             // request, long after the Jaeger poll's stable-stop gave up. Re-arm the poll
@@ -4120,14 +4137,14 @@
                     marks.forEach(function(m){
                         if (frac >= m[1] && audioBeacons[m[0]] && !audioBeacons.fired[m[0]]) {
                             audioBeacons.fired[m[0]] = true;
-                            fireBeacon(audioBeacons[m[0]], m[0]);
+                            fireBeacon(audioBeacons[m[0]], m[0], player.currentTime);
                         }
                     });
                 });
                 player.addEventListener('ended', function(){
                     if (audioBeacons && audioBeacons['complete'] && !audioBeacons.fired['complete']) {
                         audioBeacons.fired['complete'] = true;
-                        fireBeacon(audioBeacons['complete'], 'complete');
+                        fireBeacon(audioBeacons['complete'], 'complete', player.duration);
                     }
                 });
             });

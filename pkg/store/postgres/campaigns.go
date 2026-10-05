@@ -113,6 +113,10 @@ LEFT JOIN LATERAL (
         'dur', COALESCE(c.duration_seconds, 0),
         'media', COALESCE(c.asset_url, ''),
         'vast_tag', COALESCE(c.vast_tag_url, ''),
+        'html', CASE WHEN c.format = 'display'
+                      AND COALESCE(c.html_content, '') <> ''
+                      AND position('${' in c.html_content) = 0
+                     THEN c.html_content ELSE '' END,
         'native', c.native_assets
     ) ORDER BY lic.weight DESC, c.created_at ASC) AS creatives_json
     FROM line_item_creatives lic
@@ -270,6 +274,7 @@ func parseCreativesJSON(raw string) []models.CampaignCreative {
 		Dur     int                  `json:"dur"`
 		Media   string               `json:"media"`
 		VASTTag string               `json:"vast_tag"`
+		HTML    string               `json:"html"`
 		Native  *models.NativeAssets `json:"native"`
 	}
 	if err := json.Unmarshal([]byte(raw), &rows); err != nil {
@@ -285,6 +290,7 @@ func parseCreativesJSON(raw string) []models.CampaignCreative {
 			Duration:   r.Dur,
 			MediaURL:   r.Media,
 			VASTTagURL: r.VASTTag,
+			HTML:       r.HTML,
 			Native:     r.Native,
 		})
 	}

@@ -36,6 +36,13 @@ type CampaignCreative struct {
 	// this URL instead of an InLine built from MediaURL. Video/audio only;
 	// exactly one of MediaURL / VASTTagURL is expected.
 	VASTTagURL string
+	// HTML is the display creative's markup, populated ONLY when it is
+	// self-contained (format=display, inline html_content, no ${...}
+	// platform macros — computed in SQL at cache load). The DSP emits it
+	// as bid.adm (OpenRTB §4.3); macro-carrying / DPA / asset-hosted
+	// creatives leave this empty and bid CreativeID-only (the ad server
+	// render path owns those).
+	HTML string
 	// Native is the asset set for native creatives (creatives.native_assets);
 	// nil for non-native formats.
 	Native *NativeAssets
