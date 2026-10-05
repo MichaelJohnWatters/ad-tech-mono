@@ -9,6 +9,7 @@
 package e2e
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -167,6 +168,57 @@ func TestDisplayAdMNoAdMPlaceholder(t *testing.T) {
 	})
 	if strings.Contains(res.HTML, "data-external-adm-wrapper") {
 		t.Errorf("adm-less winner must not ride the external wrapper:\n%s", res.HTML)
+	}
+}
+
+// TestDisplayAdMInternalEmission (Phase B): the DSP emits bid.adm for a
+// SELF-CONTAINED display creative (no ${...} platform macros) and omits it
+// for the seeded macro-carrying template — and an internal winner still
+// serves via the ad-server render path, never the external wrapper.
+func TestDisplayAdMInternalEmission(t *testing.T) {
+	h := harness.WaitReady(t, 60*time.Second)
+	w := harness.BuildBasicWorld(t, h, "dadm-emit")
+
+	admOfWinner := func(t *testing.T, r harness.AuctionResult) string {
+		t.Helper()
+		var br openrtb.BidResponse
+		if err := json.Unmarshal(r.BidResponse, &br); err != nil {
+			t.Fatalf("decode bid response: %v", err)
+		}
+		if br.NoBid || len(br.SeatBid) == 0 || len(br.SeatBid[0].Bid) == 0 {
+			t.Fatal("auction did not fill")
+		}
+		return br.SeatBid[0].Bid[0].AdM
+	}
+
+	// Negative first: the seeded creative carries ${WIDTH}/${CAMPAIGN_ID}
+	// platform macros → NOT self-contained → no adm emitted.
+	res := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", "dadm-emit-u1")
+	if adm := admOfWinner(t, res); adm != "" {
+		t.Fatalf("macro-carrying creative must emit no adm, got %q", adm)
+	}
+
+	// Flip the creative to self-contained HTML → adm emitted.
+	selfContained := `<div data-self-contained="1" onclick="window.open('https://dadm-emit.test')">ACME self-contained 300x250</div>`
+	h.SetCreativeHTML(t, w.AdvAcc, w.Campaign.CreativeID, selfContained)
+	h.RefreshAllCaches(t)
+	harness.WaitFor(t, 20*time.Second, "DSP emits display adm", func() bool {
+		r := h.RunAuction(t, w.Placement.ExternalID, "GBR", "mobile", fmt.Sprintf("dadm-emit-u-%d", time.Now().UnixNano()))
+		return strings.Contains(admOfWinner(t, r), "data-self-contained")
+	})
+
+	// Serving preference: the creative is KNOWN internally, so the serve
+	// rides the ad-server render path — the buyer-wrapper div must NOT
+	// appear even though the bid carried adm.
+	serve := h.ServeViaSSP(t, harness.AuctionParams{
+		Placement: w.Placement.ExternalID, Geo: "GBR", Device: "mobile",
+		UserID: fmt.Sprintf("dadm-emit-serve-%d", time.Now().UnixNano()), IP: "203.0.113.42",
+	})
+	if serve.NoBid || !strings.Contains(serve.HTML, "data-self-contained") {
+		t.Fatalf("internal winner must serve its creative, got nobid=%v html=%q", serve.NoBid, serve.HTML)
+	}
+	if strings.Contains(serve.HTML, "data-external-adm-wrapper") {
+		t.Errorf("internal winner must use the render path, not the external wrapper:\n%s", serve.HTML)
 	}
 }
 

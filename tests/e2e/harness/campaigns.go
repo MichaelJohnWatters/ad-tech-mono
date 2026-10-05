@@ -182,6 +182,19 @@ ON CONFLICT (line_item_id, creative_id) DO NOTHING`
 	}
 }
 
+// SetCreativeHTML overwrites a display creative's html_content — used to
+// flip the seeded macro-carrying template to SELF-CONTAINED HTML (no ${...}
+// tokens), which is what makes the DSP emit it as bid.adm (OpenRTB §4.3,
+// display-adm Phase B). Refresh caches after.
+func (h *Harness) SetCreativeHTML(t *testing.T, owner Account, creativeID, html string) {
+	t.Helper()
+	h.WithTenant(t, owner.ID, func(tx *sql.Tx) {
+		if _, err := tx.Exec(`UPDATE creatives SET html_content = $1, updated_at = now() WHERE id = $2`, html, creativeID); err != nil {
+			t.Fatalf("set creative html: %v", err)
+		}
+	})
+}
+
 // CreateVideoWrapperCampaign is CreateVideoCampaign's third-party-tag
 // sibling: the creative carries vast_tag_url (and NO asset_url), so the DSP
 // bids a VAST 4.2 Wrapper (AdCOM protocol 14) whose VASTAdTagURI points at
