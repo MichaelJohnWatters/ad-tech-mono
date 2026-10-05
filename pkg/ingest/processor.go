@@ -254,14 +254,18 @@ func (p *Processor) Process(ctx context.Context, job ingestjobs.Job) (ingestjobs
 	if segName == "" {
 		segName = SegmentNameFromFile(path.Base(key))
 	}
+	// Empty type/visibility flows through to UpsertSegment UNCHANGED: on a
+	// new segment the store defaults (first_party / dsp_private); on an
+	// existing one it PRESERVES the current values — a re-upload that didn't
+	// assert metadata must never rewrite it (the Lumière visibility-flip
+	// incident, 2026-10-05). Exception: drop-zone files have no requester to
+	// assert a type, so new drop-zone segments keep their historical
+	// cdp_imported label (preserve-on-conflict still applies to existing).
 	segType := spec.Type
-	if segType == "" {
+	if segType == "" && job.Source == ingestjobs.SourceDropzone {
 		segType = "cdp_imported"
 	}
 	visibility := spec.Visibility
-	if visibility == "" {
-		visibility = "dsp_private"
-	}
 	// Data-party classification (ADR 0009): the producer snapshots it from the
 	// selected provider onto the spec at enqueue; absent that it's first-party
 	// (our own upload). Stamped onto the segment + every profile.signal so

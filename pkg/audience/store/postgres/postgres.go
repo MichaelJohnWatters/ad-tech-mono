@@ -195,15 +195,28 @@ func (s *Store) withTenant(ctx context.Context, accountID string, fn func(tx *sq
 // UpsertSegment finds-or-creates a segment for (accountID, name) and returns
 // its deterministic ID (UUIDv5 over account+name, so re-uploading the same
 // named list targets the same segment rather than spawning duplicates).
+//
+// Metadata semantics (the Lumière visibility-flip incident, 2026-10-05):
+// typ/visibility are applied ONLY when non-empty. Empty = "caller didn't
+// say" = PRESERVE what the segment already has (defaulting first_party /
+// dsp_private only on first creation). An advertiser's deliberate
+// dsp_private choice must survive every later writer that merely re-touches
+// the segment — a re-upload without an explicit visibility, a background
+// enroller, a demo flow — because EXCLUDED-overwrites silently flipped a
+// private CRM list public. Writers that DO pass values are asserting them
+// on purpose (the portal upload form always sends both).
 func (s *Store) UpsertSegment(ctx context.Context, accountID, name, typ, source, visibility string) (string, error) {
 	segmentID := idgen.Derive("segment", accountID+"/"+name)
 	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
 		const q = `
 INSERT INTO audience_segments (id, account_id, name, type, status, source, visibility, created_at, updated_at)
-VALUES ($1, $2, $3, $4, 'active', $5, $6, now(), now())
+VALUES ($1, $2, $3, COALESCE(NULLIF($4, ''), 'first_party'), 'active', $5, COALESCE(NULLIF($6, ''), 'dsp_private'), now(), now())
 ON CONFLICT (id) DO UPDATE SET
-    name = EXCLUDED.name, type = EXCLUDED.type, source = EXCLUDED.source,
-    visibility = EXCLUDED.visibility, updated_at = now()`
+    name = EXCLUDED.name,
+    type = COALESCE(NULLIF($4, ''), audience_segments.type),
+    source = EXCLUDED.source,
+    visibility = COALESCE(NULLIF($6, ''), audience_segments.visibility),
+    updated_at = now()`
 		_, err := tx.ExecContext(ctx, q, segmentID, accountID, name, typ, source, visibility)
 		return err
 	})
