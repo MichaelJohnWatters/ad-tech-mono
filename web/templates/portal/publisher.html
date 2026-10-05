@@ -179,21 +179,20 @@
     <section id="section-reports" class="portal-section p-6 space-y-6 hidden">
       {{ template "section-intro" "Custom analytics — query your impressions, clicks, auctions, and revenue; group by placement/day/geo, save queries, and schedule exports." }}
       {{ template "card-start" (dict "title" "Query") }}
-      <form id="reportForm" class="grid grid-cols-2 md:grid-cols-6 gap-3 items-end" onsubmit="runReport(event)">
+      <form id="reportForm" class="grid grid-cols-2 md:grid-cols-7 gap-3 items-end" onsubmit="runReport(event)">
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Table</span>
-          <select id="repTable" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
-            <option>impressions</option><option>clicks</option><option>auctions</option><option>auction_wins</option>
-            <option>media_events</option>
+          <select id="repTable" onchange="onReportTableChange()" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="">loading…</option>
           </select>
         </label>
         <label class="block text-sm">
-          <span class="block mb-1 text-gray-600 dark:text-gray-300">Metrics</span>
-          <input id="repMetrics" value="count,sum_cost" title="count, sum_cost, fill_rate, ecpm, net_revenue — on media_events (video/audio quartiles): media_starts, media_completes, completion_rate" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Metrics <span class="text-gray-400">(⌘/Ctrl-click for several)</span></span>
+          <select id="repMetrics" multiple size="4" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm"></select>
         </label>
         <label class="block text-sm">
-          <span class="block mb-1 text-gray-600 dark:text-gray-300">Group by</span>
-          <input id="repDims" placeholder="placement_id,day" title="placement_id, campaign_id, deal_id, day, hour — media_events also groups by channel and event_type" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Group by <span class="text-gray-400">(optional)</span></span>
+          <select id="repDims" multiple size="4" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm"></select>
         </label>
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Range</span>
@@ -205,6 +204,12 @@
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Job format</span>
           <select id="repFormat" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
             <option value="csv">CSV</option><option value="json">JSON</option><option value="parquet">Parquet</option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-gray-600 dark:text-gray-300">Job delivery</span>
+          <select id="repDelivery" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" title="How the finished job reaches you — email a download link, fire your report.completed webhook, or download here">
+            <option value="none">Download here</option><option value="email">Email link</option><option value="webhook">Webhook</option>
           </select>
         </label>
         <div class="flex gap-2">
@@ -230,7 +235,7 @@
         <label class="block text-sm">
           <span class="block mb-1 text-gray-600 dark:text-gray-300">Schedule</span>
           <select id="svSchedule" onchange="toggleCronInput()" class="rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
-            <option value="">Manual</option><option value="@hourly">Hourly</option><option value="@daily">Daily</option>
+            <option value="">Manual</option><option value="* * * * *">Every minute (demo)</option><option value="@hourly">Hourly</option><option value="@daily">Daily</option>
             <option value="@weekly">Weekly</option><option value="@monthly">Monthly</option><option value="custom">Custom cron…</option>
           </select>
         </label>
@@ -849,7 +854,7 @@ const showSection = initSectionRouter({
   sections: ['dashboard', 'placements', 'deals', 'directsold', 'quality', 'audiences', 'reports', 'adtag', 'earnings', 'team', 'webhooks'],
   loaders: {dashboard: () => loadDashboard(), placements: () => loadPlacements(), deals: () => loadDeals(),
     directsold: () => loadDirect(), quality: () => loadQuality(), audiences: () => loadAudiences(),
-    reports: () => { loadSaved(); loadJobs(); loadRecentImpressions(); },
+    reports: () => { loadReportSchema(); loadSaved(); loadJobs(); loadRecentImpressions(); },
     adtag: () => loadTagPicker(), earnings: () => loadEarnings(), team: () => loadTeam(),
     webhooks: () => loadWebhooks()},
   reEnter: {reports: () => loadJobs()}, // re-entering restarts the in-flight poll
@@ -1510,12 +1515,13 @@ async function saveDeal(ev) {
 // ---- Report jobs (async) ----
 function runAsJob(ev) {
   ev.preventDefault();
-  const split = (v) => v.split(',').map(s => s.trim()).filter(Boolean);
   const days = parseInt($('repRange').value, 10);
+  // Read the schema-driven multi-selects the same way the shared sync console
+  // does (selVals handles both multi-select and legacy comma text).
   const query = {
     table: $('repTable').value,
-    metrics: split($('repMetrics').value),
-    dimensions: split($('repDims').value),
+    metrics: selVals('repMetrics'),
+    dimensions: selVals('repDims'),
     time_from: daysAgo(days),
   };
   // Same rule as the sync console: send the selected publisher_id; the
@@ -1526,6 +1532,7 @@ function runAsJob(ev) {
     name: `${$('repTable').value} last ${days}d`,
     query_config: query,
     format: $('repFormat').value,
+    delivery: $('repDelivery') ? $('repDelivery').value : 'none',
   }, 'watch the Report jobs table below');
 }
 
