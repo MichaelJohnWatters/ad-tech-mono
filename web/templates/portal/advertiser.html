@@ -2955,7 +2955,22 @@ async function uploadAudience(ev) {
         body: JSON.stringify(body)});
     }
     const text = await resp.text();
-    if (!resp.ok) { let m = text; try { m = JSON.parse(text).error || text; } catch {} throw new Error(m); }
+    if (!resp.ok) {
+      let m = text, parsed = null;
+      try { parsed = JSON.parse(text); m = parsed.error || text; } catch {}
+      // 409 duplicate-name guard: the server found an audience whose name
+      // differs only by case/whitespace. Select it in the Audience dropdown
+      // so one more click on Upload appends to the right place.
+      if (resp.status === 409 && parsed && parsed.existing && $('au_target')) {
+        $('au_target').value = parsed.existing.id;
+        if ($('au_target').value === parsed.existing.id) {
+          audienceTargetChanged();
+          toast(`That name nearly matches "${parsed.existing.name}" — selected it for you; click Upload again to add members to it`, 'error');
+          return;
+        }
+      }
+      throw new Error(m);
+    }
     const res = JSON.parse(text);
     $('newAudience').classList.add('hidden');
     $('au_file').value = '';

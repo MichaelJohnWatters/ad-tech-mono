@@ -20,6 +20,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audiencemappings"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/config/keys"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/dataproviders"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/email"
@@ -322,6 +323,28 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, cl
 		http.Error(w, `{"error":"name is required"}`, http.StatusBadRequest)
 		return
 	}
+	// Duplicate-name guard: upserts key on the EXACT name, so "diamond
+	// intenders" quietly creates a brand-new segment beside "Diamond &
+	// Jewelry Intenders" — a typo that strands members in an audience no
+	// campaign targets. A case/whitespace-insensitive match that is NOT
+	// exact is almost certainly that typo: refuse with the existing
+	// segment's identity so the caller (and the portal UI) can retarget the
+	// upload. Exact matches keep today's append-by-upsert behaviour.
+	if existing, err := deps.store.ListSegments(r.Context(), accountID); err == nil {
+		norm := func(s string) string { return strings.Join(strings.Fields(strings.ToLower(s)), " ") }
+		want := norm(req.Name)
+		for _, seg := range existing {
+			if seg.Name != req.Name && norm(seg.Name) == want {
+				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+				w.WriteHeader(http.StatusConflict)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":    fmt.Sprintf("an audience named %q already exists — re-upload with that exact name to add members to it, or pick a clearly different name", seg.Name),
+					"existing": map[string]string{"id": seg.ID, "name": seg.Name},
+				})
+				return
+			}
+		}
+	} // best-effort: a listing failure must not block a legitimate upload
 	if len(raw) > deps.maxBytes {
 		http.Error(w, fmt.Sprintf(`{"error":"upload exceeds %d bytes"}`, deps.maxBytes), http.StatusBadRequest)
 		return
