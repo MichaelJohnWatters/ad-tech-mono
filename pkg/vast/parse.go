@@ -69,9 +69,15 @@ func Parse(b []byte) (*VAST, error) {
 //
 // Idempotent per-URI: a URI already present in the target list is skipped,
 // so re-injection (an adm that somehow already carries our beacons) never
-// double-fires. Wrapper ads are left untouched until wrapper support lands.
+// double-fires. Wrapper ads get the same treatment at WRAPPER level
+// (impressions/errors on the Wrapper, events in a wrapper tracking creative)
+// — the player fires wrapper trackers alongside the wrapped document's own.
 func (d *VAST) InjectLinearTrackers(t LinearTrackers, errorURLs []string, click ClickSpec) {
 	for i := range d.Ads {
+		if wr := d.Ads[i].Wrapper; wr != nil {
+			injectWrapperTrackers(wr, t, errorURLs, click)
+			continue
+		}
 		in := d.Ads[i].InLine
 		if in == nil {
 			continue
@@ -140,6 +146,71 @@ func BuildDocument(ads []Ad) ([]byte, error) {
 		Version:  Version,
 		Ads:      ads,
 	})
+}
+
+// injectWrapperTrackers appends platform trackers to a Wrapper ad: the
+// behaviour attrs are defaulted when the source document left them unset,
+// impressions/errors append at wrapper level, event trackers merge into (or
+// create) a wrapper-level tracking creative, clicks follow the same
+// never-clobber rule as InLine.
+func injectWrapperTrackers(w *Wrapper, t LinearTrackers, errorURLs []string, click ClickSpec) {
+	if w.FollowAdditionalWrappers == "" {
+		w.FollowAdditionalWrappers = "true"
+	}
+	if w.AllowMultipleAds == "" {
+		w.AllowMultipleAds = "false"
+	}
+	if w.FallbackOnNoAd == "" {
+		w.FallbackOnNoAd = "true"
+	}
+	for _, u := range t.Impression {
+		if !hasImpressionURI(w.Impressions, u) {
+			w.Impressions = append(w.Impressions, Impression{URI: u})
+		}
+	}
+	for _, u := range errorURLs {
+		if !hasErrorURI(w.Errors, u) {
+			w.Errors = append(w.Errors, Error{URI: u})
+		}
+	}
+	events := t
+	events.Impression = nil
+	te := buildTrackingEvents(events)
+	vc := buildVideoClicks(click)
+	if te == nil && vc == nil {
+		return
+	}
+	if w.Creatives == nil || len(w.Creatives.Creatives) == 0 {
+		w.Creatives = &Creatives{Creatives: []Creative{{Linear: &Linear{}}}}
+	}
+	cr := &w.Creatives.Creatives[0]
+	if cr.Linear == nil {
+		cr.Linear = &Linear{}
+	}
+	if te != nil {
+		if cr.Linear.TrackingEvents == nil {
+			cr.Linear.TrackingEvents = &TrackingEvents{}
+		}
+		for _, tr := range te.Tracking {
+			if !hasTracking(cr.Linear.TrackingEvents.Tracking, tr) {
+				cr.Linear.TrackingEvents.Tracking = append(cr.Linear.TrackingEvents.Tracking, tr)
+			}
+		}
+	}
+	if vc != nil {
+		if cr.Linear.VideoClicks == nil {
+			cr.Linear.VideoClicks = &VideoClicks{}
+		}
+		dst := cr.Linear.VideoClicks
+		if vc.ClickThrough != nil && (dst.ClickThrough == nil || dst.ClickThrough.URI == "") {
+			dst.ClickThrough = vc.ClickThrough
+		}
+		for _, ct := range vc.ClickTracking {
+			if !hasClickURI(dst.ClickTracking, ct.URI) {
+				dst.ClickTracking = append(dst.ClickTracking, ct)
+			}
+		}
+	}
 }
 
 func hasImpressionURI(list []Impression, uri string) bool {

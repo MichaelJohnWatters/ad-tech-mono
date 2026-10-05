@@ -60,13 +60,17 @@ type sspVideoWinner struct {
 func adFromWinner(r *http.Request, winner *sspVideoWinner, spec vast.LinearSpec, consumeAdM bool, secureBase string, reqLog *slog.Logger) (vast.Ad, bool) {
 	if consumeAdM && winner.AdM != "" && vast.Sniff(winner.AdM) {
 		doc, err := vast.Parse([]byte(winner.AdM))
-		if err == nil && len(doc.Ads) > 0 && doc.Ads[0].InLine != nil {
+		if err == nil && len(doc.Ads) > 0 && (doc.Ads[0].InLine != nil || doc.Ads[0].Wrapper != nil) {
+			// InLine: inject into the creative; Wrapper: inject at wrapper
+			// level (the player fires ours alongside the wrapped chain's).
 			doc.InjectLinearTrackers(spec.Trackers, spec.ErrorURLs, spec.Click)
 			ad := doc.Ads[0]
 			ad.Sequence = spec.Sequence
-			rehostPlatformMedia(r, &ad, secureBase)
-			if len(spec.Verifications) > 0 && ad.InLine.AdVerifications == nil {
-				ad.InLine.AdVerifications = vast.AdVerificationsFor(spec.Verifications)
+			if ad.InLine != nil {
+				rehostPlatformMedia(r, &ad, secureBase)
+				if len(spec.Verifications) > 0 && ad.InLine.AdVerifications == nil {
+					ad.InLine.AdVerifications = vast.AdVerificationsFor(spec.Verifications)
+				}
 			}
 			return ad, true
 		}
@@ -89,7 +93,7 @@ func rehostPlatformMedia(r *http.Request, ad *vast.Ad, secureBase string) {
 	}
 	for c := range ad.InLine.Creatives.Creatives {
 		lin := ad.InLine.Creatives.Creatives[c].Linear
-		if lin == nil {
+		if lin == nil || lin.MediaFiles == nil {
 			continue
 		}
 		for m := range lin.MediaFiles.MediaFiles {

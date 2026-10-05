@@ -31,6 +31,11 @@ type CampaignCreative struct {
 	Height   int
 	Duration int    // seconds; video / audio creatives only
 	MediaURL string // video / audio media file URL (creatives.asset_url)
+	// VASTTagURL (creatives.vast_tag_url) marks a third-party VAST tag
+	// creative: the DSP bids a VAST 4.2 Wrapper (protocol 14) pointing at
+	// this URL instead of an InLine built from MediaURL. Video/audio only;
+	// exactly one of MediaURL / VASTTagURL is expected.
+	VASTTagURL string
 	// Native is the asset set for native creatives (creatives.native_assets);
 	// nil for non-native formats.
 	Native *NativeAssets

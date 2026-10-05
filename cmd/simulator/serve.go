@@ -182,14 +182,29 @@ func maybeConvert(client *http.Client, impBeacon, traceparent string, p profile,
 // rolls) so the run summary can explain the missing completes.
 var playbackErrors64 int64
 
-// serveVAST mirrors the web video/audio tabs: GET the VAST, then fire the
-// Impression + quartile Tracking URLs the way a spec-compliant player does as
-// it plays through the ad, plus a stochastic click. These are the server's
-// signed beacons. Player-side IAB bracket macros ([CACHEBUSTING], [TIMESTAMP],
-// [ADPLAYHEAD], [ERRORCODE]) are substituted before every fire — the server
-// emits them as literal tokens outside the HMAC. A profile.ErrorRate roll
-// simulates a fatal playback failure: impression + start, then the <Error>
-// URIs with code 405 (problem displaying MediaFile), then stop.
+// maxWrapperDepth is the VAST 4.2 default wrapper-chain bound: a player
+// gives up with error 302 when a chain exceeds 5 hops.
+const maxWrapperDepth = 5
+
+// vastHop aggregates the trackers collected from wrapper hops so the
+// terminal InLine playback fires the UNION of every hop's beacons (per
+// spec: wrapper impressions/events fire alongside the wrapped ad's own).
+type vastHop struct {
+	impressions []string
+	errors      []string
+	trackings   []vast.Tracking
+	clickTracks []string
+}
+
+// serveVAST mirrors the web video/audio tabs: GET the VAST, then resolve
+// wrapper chains (bounded, spec errors 302/303) and fire the Impression +
+// quartile Tracking URLs the way a spec-compliant player does, plus a
+// stochastic click. These are the server's signed beacons. Player-side IAB
+// bracket macros ([CACHEBUSTING], [TIMESTAMP], [ADPLAYHEAD], [ERRORCODE])
+// are substituted before every fire — the server emits them as literal
+// tokens outside the HMAC. A profile.ErrorRate roll simulates a fatal
+// playback failure: impression + start, then the <Error> URIs with code 405
+// (problem displaying MediaFile), then stop.
 func serveVAST(client *http.Client, url, traceparent string, p profile, rng *rand.Rand) (bool, error) {
 	body, err := getBody(client, url, traceparent)
 	if err != nil {
@@ -202,67 +217,160 @@ func serveVAST(client *http.Client, url, traceparent string, p profile, rng *ran
 	if len(doc.Ads) == 0 {
 		return false, nil
 	}
+	served := false
 	for _, ad := range doc.Ads {
-		if ad.InLine == nil {
+		if playVASTAd(client, ad, traceparent, p, rng, 0, vastHop{}) {
+			served = true
+		}
+	}
+	return served, nil
+}
+
+// playVASTAd resolves one ad: a Wrapper collects its trackers, fetches
+// VASTAdTagURI and recurses (depth-capped); an InLine plays through,
+// firing the union of the chain's trackers with bracket macros expanded.
+func playVASTAd(client *http.Client, ad vast.Ad, traceparent string, p profile, rng *rand.Rand, depth int, hop vastHop) bool {
+	expand := func(uri string, v vast.URIMacroValues) string {
+		v.Rand = rng.Int63
+		return vast.ExpandURIMacros(strings.TrimSpace(uri), v)
+	}
+	fireChainError := func(code int) {
+		for _, e := range hop.errors {
+			fireGet(client, expand(e, vast.URIMacroValues{ErrorCode: code}), traceparent)
+		}
+	}
+
+	if w := ad.Wrapper; w != nil {
+		// Collect this hop's trackers for the terminal playback / errors.
+		for _, imp := range w.Impressions {
+			hop.impressions = append(hop.impressions, imp.URI)
+		}
+		for _, e := range w.Errors {
+			hop.errors = append(hop.errors, e.URI)
+		}
+		if w.Creatives != nil {
+			for _, cr := range w.Creatives.Creatives {
+				if cr.Linear == nil {
+					continue
+				}
+				if cr.Linear.TrackingEvents != nil {
+					hop.trackings = append(hop.trackings, cr.Linear.TrackingEvents.Tracking...)
+				}
+				if cr.Linear.VideoClicks != nil {
+					for _, ct := range cr.Linear.VideoClicks.ClickTracking {
+						hop.clickTracks = append(hop.clickTracks, ct.URI)
+					}
+				}
+			}
+		}
+		if depth+1 > maxWrapperDepth {
+			fireChainError(302) // wrapper limit reached
+			return false
+		}
+		body, err := getBody(client, strings.TrimSpace(w.VASTAdTagURI.URI), traceparent)
+		if err != nil {
+			fireChainError(301) // timeout/failure fetching VAST URI
+			return false
+		}
+		var next vast.VAST
+		if err := xml.Unmarshal(body, &next); err != nil {
+			fireChainError(100) // XML parsing error
+			return false
+		}
+		if len(next.Ads) == 0 {
+			fireChainError(303) // no VAST response after wrapper(s)
+			return false
+		}
+		nextAd := next.Ads[0]
+		if nextAd.Wrapper != nil && strings.EqualFold(w.FollowAdditionalWrappers, "false") {
+			fireChainError(300) // chain continued where the wrapper forbade it
+			return false
+		}
+		return playVASTAd(client, nextAd, traceparent, p, rng, depth+1, hop)
+	}
+
+	if ad.InLine == nil {
+		return false
+	}
+	// Union of impressions / error URIs across the chain + this InLine.
+	impressions := append(hop.impressions, urisOfImpressions(ad.InLine.Impressions)...)
+	errorURIs := append(hop.errors, urisOfErrors(ad.InLine.Errors)...)
+	var firstImp string
+	for _, u := range impressions {
+		uri := expand(u, vast.URIMacroValues{})
+		if firstImp == "" {
+			firstImp = uri
+		}
+		fireGet(client, uri, traceparent)
+	}
+	played := false
+	for _, cr := range ad.InLine.Creatives.Creatives {
+		if cr.Linear == nil {
 			continue
 		}
-		// Player-side macro substitution at the playhead position `pos`.
-		expand := func(uri string, v vast.URIMacroValues) string {
-			v.Rand = rng.Int63
-			return vast.ExpandURIMacros(strings.TrimSpace(uri), v)
-		}
-		var firstImp string
-		for _, imp := range ad.InLine.Impressions {
-			uri := expand(imp.URI, vast.URIMacroValues{})
-			if firstImp == "" {
-				firstImp = uri
-			}
-			fireGet(client, uri, traceparent)
-		}
-		for _, cr := range ad.InLine.Creatives.Creatives {
-			if cr.Linear == nil {
-				continue
-			}
-			adDur := time.Duration(cr.Linear.Duration)
-			fireEvent := func(ev string, pos time.Duration) {
-				if cr.Linear.TrackingEvents == nil {
-					return
-				}
+		played = true
+		adDur := time.Duration(cr.Linear.Duration)
+		fireEvent := func(ev string, pos time.Duration) {
+			if cr.Linear.TrackingEvents != nil {
 				for _, tr := range cr.Linear.TrackingEvents.Tracking {
 					if tr.Event == ev {
 						fireGet(client, expand(tr.URI, vast.URIMacroValues{AdPlayhead: pos, ContentPlayhead: pos}), traceparent)
 					}
 				}
 			}
-			if p.ErrorRate > 0 && rng.Float64() < p.ErrorRate {
-				// Fatal mid-start failure: a spec player fires what it saw
-				// (impression already sent + start), pings every <Error> URI
-				// with [ERRORCODE] substituted, and abandons the ad.
-				fireEvent("start", 0)
-				for _, e := range ad.InLine.Errors {
-					fireGet(client, expand(e.URI, vast.URIMacroValues{ErrorCode: 405}), traceparent)
+			for _, tr := range hop.trackings { // wrapper-level events fire too
+				if tr.Event == ev {
+					fireGet(client, expand(tr.URI, vast.URIMacroValues{AdPlayhead: pos, ContentPlayhead: pos}), traceparent)
 				}
-				atomic.AddInt64(&playbackErrors64, 1)
-				continue
-			}
-			// Standard playback progression at quartile playheads.
-			fireEvent("start", 0)
-			fireEvent("firstQuartile", adDur/4)
-			fireEvent("midpoint", adDur/2)
-			fireEvent("thirdQuartile", 3*adDur/4)
-			fireEvent("complete", adDur)
-			if cr.Linear.VideoClicks != nil && rng.Float64() < p.ClickRate {
-				if ct := cr.Linear.VideoClicks.ClickThrough; ct != nil {
-					fireGet(client, expand(ct.URI, vast.URIMacroValues{AdPlayhead: adDur / 2}), traceparent)
-				}
-				for _, c := range cr.Linear.VideoClicks.ClickTracking {
-					fireGet(client, expand(c.URI, vast.URIMacroValues{AdPlayhead: adDur / 2}), traceparent)
-				}
-				maybeConvert(client, firstImp, traceparent, p, rng) // post-click conversion
 			}
 		}
+		if p.ErrorRate > 0 && rng.Float64() < p.ErrorRate {
+			// Fatal mid-start failure: a spec player fires what it saw
+			// (impression already sent + start), pings every <Error> URI in
+			// the chain with [ERRORCODE] substituted, and abandons the ad.
+			fireEvent("start", 0)
+			for _, e := range errorURIs {
+				fireGet(client, expand(e, vast.URIMacroValues{ErrorCode: 405}), traceparent)
+			}
+			atomic.AddInt64(&playbackErrors64, 1)
+			continue
+		}
+		// Standard playback progression at quartile playheads.
+		fireEvent("start", 0)
+		fireEvent("firstQuartile", adDur/4)
+		fireEvent("midpoint", adDur/2)
+		fireEvent("thirdQuartile", 3*adDur/4)
+		fireEvent("complete", adDur)
+		if cr.Linear.VideoClicks != nil && rng.Float64() < p.ClickRate {
+			if ct := cr.Linear.VideoClicks.ClickThrough; ct != nil {
+				fireGet(client, expand(ct.URI, vast.URIMacroValues{AdPlayhead: adDur / 2}), traceparent)
+			}
+			for _, c := range cr.Linear.VideoClicks.ClickTracking {
+				fireGet(client, expand(c.URI, vast.URIMacroValues{AdPlayhead: adDur / 2}), traceparent)
+			}
+			for _, c := range hop.clickTracks {
+				fireGet(client, expand(c, vast.URIMacroValues{AdPlayhead: adDur / 2}), traceparent)
+			}
+			maybeConvert(client, firstImp, traceparent, p, rng) // post-click conversion
+		}
 	}
-	return true, nil
+	return played
+}
+
+func urisOfImpressions(list []vast.Impression) []string {
+	out := make([]string, 0, len(list))
+	for _, x := range list {
+		out = append(out, x.URI)
+	}
+	return out
+}
+
+func urisOfErrors(list []vast.Error) []string {
+	out := make([]string, 0, len(list))
+	for _, x := range list {
+		out = append(out, x.URI)
+	}
+	return out
 }
 
 var trackerURLRe = regexp.MustCompile(`(?:src|href)="([^"]+/v1/t/[^"]+)"`)

@@ -125,6 +125,75 @@ func BuildPod(specs []LinearSpec) ([]byte, error) {
 // spec-built and parsed ads in one document (pod slots) share the shape.
 func SpecToAd(spec LinearSpec) Ad { return specToAd(spec) }
 
+// WrapperSpec is the input for a VAST Wrapper ad: the third-party tag URL
+// the player fetches next, plus the platform trackers that ride at wrapper
+// level (fired by the player alongside whatever the wrapped document adds).
+type WrapperSpec struct {
+	AdID         string
+	AdSystem     string
+	VASTAdTagURI string
+	Trackers     LinearTrackers // Impression → wrapper Impressions; events → wrapper Creative TrackingEvents
+	ErrorURLs    []string
+	Click        ClickSpec
+	Sequence     int
+	// Behaviour attributes (VAST 4.2 wrapper rules). Defaults when zero:
+	// followAdditionalWrappers=true, allowMultipleAds=false, fallbackOnNoAd=true.
+	FollowAdditionalWrappers *bool
+	AllowMultipleAds         *bool
+	FallbackOnNoAd           *bool
+}
+
+// BuildWrapperAd produces a single-Ad VAST 4.2 document whose ad is a
+// Wrapper. SpecToWrapperAd is the Ad-level variant for pod mixing.
+func BuildWrapperAd(spec WrapperSpec) ([]byte, error) {
+	return BuildDocument([]Ad{SpecToWrapperAd(spec)})
+}
+
+// SpecToWrapperAd converts a WrapperSpec to a Wrapper Ad.
+func SpecToWrapperAd(spec WrapperSpec) Ad {
+	adSys := spec.AdSystem
+	if adSys == "" {
+		adSys = "ad-tech-mono"
+	}
+	boolAttr := func(p *bool, def bool) string {
+		v := def
+		if p != nil {
+			v = *p
+		}
+		if v {
+			return "true"
+		}
+		return "false"
+	}
+	w := &Wrapper{
+		FollowAdditionalWrappers: boolAttr(spec.FollowAdditionalWrappers, true),
+		AllowMultipleAds:         boolAttr(spec.AllowMultipleAds, false),
+		FallbackOnNoAd:           boolAttr(spec.FallbackOnNoAd, true),
+		AdSystem:                 AdSystem{Name: adSys, Version: "1.0"},
+		VASTAdTagURI:             TagURI{URI: spec.VASTAdTagURI},
+	}
+	for _, u := range spec.Trackers.Impression {
+		w.Impressions = append(w.Impressions, Impression{URI: u})
+	}
+	for _, u := range spec.ErrorURLs {
+		w.Errors = append(w.Errors, Error{URI: u})
+	}
+	events := spec.Trackers
+	events.Impression = nil
+	te := buildTrackingEvents(events)
+	vc := buildVideoClicks(spec.Click)
+	if te != nil || vc != nil {
+		// Wrapper-level creative: TrackingEvents/VideoClicks only, no
+		// Duration/MediaFiles (the wrapped InLine supplies the media).
+		w.Creatives = &Creatives{Creatives: []Creative{{
+			ID:       spec.AdID,
+			Sequence: spec.Sequence,
+			Linear:   &Linear{TrackingEvents: te, VideoClicks: vc},
+		}}}
+	}
+	return Ad{ID: spec.AdID, Sequence: spec.Sequence, Wrapper: w}
+}
+
 // marshalDoc is the single marshal tail: xml header + 2-space indents
 // (human-inspectable in trace explorers; players ignore whitespace).
 func marshalDoc(doc VAST) ([]byte, error) {
@@ -174,7 +243,7 @@ func specToAd(spec LinearSpec) Ad {
 	}
 	linear := &Linear{
 		Duration: Duration(spec.Duration),
-		MediaFiles: MediaFiles{
+		MediaFiles: &MediaFiles{
 			MediaFiles: spec.MediaFiles,
 		},
 	}

@@ -114,12 +114,34 @@ type JavaScriptResource struct {
 	URI             string `xml:",cdata"`
 }
 
-// Wrapper redirects the player to another VAST document. Reserved for
-// future use when we proxy third-party VAST through our exchange.
+// Wrapper redirects the player to another VAST document (VAST 4.2
+// §3.19–3.23): the platform's own trackers ride at wrapper level while the
+// VASTAdTagURI points at the third-party tag that supplies the creative.
+// Behaviour attributes per spec: followAdditionalWrappers (may the chain
+// continue past the next hop), allowMultipleAds (may the tag return a pod),
+// fallbackOnNoAd (may the player use a fallback when the chain yields none).
+// Players bound the chain at 5 hops by default (error 302 on exceed, 303
+// when the terminal document has no ads).
+//
+// Child order AdSystem → VASTAdTagURI → Impression → Error → Creatives is
+// locked by the wrapper round-trip test; a wrapper-level Creative carries
+// TrackingEvents/VideoClicks but NO MediaFiles (hence Linear.MediaFiles is a
+// pointer).
 type Wrapper struct {
-	AdSystem     AdSystem     `xml:"AdSystem"`
-	VASTAdTagURI string       `xml:"VASTAdTagURI"`
-	Impressions  []Impression `xml:"Impression,omitempty"`
+	FollowAdditionalWrappers string       `xml:"followAdditionalWrappers,attr,omitempty"`
+	AllowMultipleAds         string       `xml:"allowMultipleAds,attr,omitempty"`
+	FallbackOnNoAd           string       `xml:"fallbackOnNoAd,attr,omitempty"`
+	AdSystem                 AdSystem     `xml:"AdSystem"`
+	VASTAdTagURI             TagURI       `xml:"VASTAdTagURI"`
+	Impressions              []Impression `xml:"Impression,omitempty"`
+	Errors                   []Error      `xml:"Error,omitempty"`
+	Creatives                *Creatives   `xml:"Creatives,omitempty"`
+}
+
+// TagURI is a CDATA-wrapped URI element (VASTAdTagURI) — same treatment as
+// every other URL in a VAST document.
+type TagURI struct {
+	URI string `xml:",cdata"`
 }
 
 // AdSystem identifies the platform that generated the VAST. Players
@@ -216,12 +238,17 @@ type UniversalAdID struct {
 // VAST_LOAD_TIMEOUT / inner=6 in IMA even though xmllint considers
 // the XML well-formed.
 type Linear struct {
-	SkipOffset     string          `xml:"skipoffset,attr,omitempty"` // "HH:MM:SS" or "N%"
-	Duration       Duration        `xml:"Duration"`
+	SkipOffset string `xml:"skipoffset,attr,omitempty"` // "HH:MM:SS" or "N%"
+	// Duration omits when zero: wrapper-level Linear creatives (tracking
+	// only) have no duration; InLine linear ads always carry one.
+	Duration       Duration        `xml:"Duration,omitempty"`
 	AdParameters   string          `xml:"AdParameters,omitempty"`
 	TrackingEvents *TrackingEvents `xml:"TrackingEvents,omitempty"`
 	VideoClicks    *VideoClicks    `xml:"VideoClicks,omitempty"`
-	MediaFiles     MediaFiles      `xml:"MediaFiles"`
+	// MediaFiles is a pointer because WRAPPER-level Linear creatives carry
+	// TrackingEvents without MediaFiles (the media comes from the wrapped
+	// tag); InLine linear ads always set it.
+	MediaFiles *MediaFiles `xml:"MediaFiles,omitempty"`
 }
 
 // TrackingEvents holds the list of (event, URL) beacons the player

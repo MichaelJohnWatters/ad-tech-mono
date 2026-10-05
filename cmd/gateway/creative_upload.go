@@ -8,6 +8,7 @@ import (
 	htmltemplate "html/template"
 	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/constants"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -22,6 +23,10 @@ type creativeInput struct {
 	Height      int    `json:"height"`
 	HTMLContent string `json:"html_content"`
 	LandingURL  string `json:"landing_url"`
+	// VASTTagURL marks a third-party VAST tag creative (video/audio only):
+	// the DSP bids a VAST Wrapper pointing at this URL. Mutually exclusive
+	// with a hosted media asset.
+	VASTTagURL string `json:"vast_tag_url"`
 }
 
 // creativeView is one row of the advertiser's creative library — includes
@@ -110,6 +115,16 @@ func creativeUploadHandler(store creativeStore, log *slog.Logger) http.HandlerFu
 			http.Error(w, `{"error":"format must be display, native, video, audio or dynamic_product"}`, http.StatusBadRequest)
 			return
 		}
+		if in.VASTTagURL != "" {
+			if in.Format != "video" && in.Format != "audio" {
+				http.Error(w, `{"error":"vast_tag_url is only valid for video/audio creatives"}`, http.StatusBadRequest)
+				return
+			}
+			if !strings.HasPrefix(in.VASTTagURL, "http://") && !strings.HasPrefix(in.VASTTagURL, "https://") {
+				http.Error(w, `{"error":"vast_tag_url must be an absolute http(s) URL"}`, http.StatusBadRequest)
+				return
+			}
+		}
 		// A dynamic_product creative's html_content is a Go template the ad server
 		// assembles at render time (DPA). Validate it parses now so a broken
 		// template is caught at authoring, not silently served as raw text.
@@ -156,11 +171,15 @@ func (s pgCreativeStore) CreateCreative(ctx context.Context, accountID string, i
 	if in.HTMLContent != "" {
 		htmlContent = in.HTMLContent
 	}
+	var vastTag any
+	if in.VASTTagURL != "" {
+		vastTag = in.VASTTagURL
+	}
 	var id string
 	if err := tx.QueryRowContext(ctx,
-		`INSERT INTO creatives (account_id, name, format, width, height, html_content, landing_url, review_status, created_at, updated_at)
-		 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, 'pending_review', now(), now()) RETURNING id::text`,
-		accountID, in.Name, in.Format, width, height, htmlContent, in.LandingURL).Scan(&id); err != nil {
+		`INSERT INTO creatives (account_id, name, format, width, height, html_content, landing_url, vast_tag_url, review_status, created_at, updated_at)
+		 VALUES ($1::uuid, $2, $3, $4, $5, $6, $7, $8, 'pending_review', now(), now()) RETURNING id::text`,
+		accountID, in.Name, in.Format, width, height, htmlContent, in.LandingURL, vastTag).Scan(&id); err != nil {
 		return "", err
 	}
 	return id, tx.Commit()

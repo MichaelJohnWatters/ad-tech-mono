@@ -977,6 +977,7 @@ paths:
                 height: { type: integer }
                 html_content: { type: string, description: "For format=dynamic_product this is a Go template the ad server assembles at render time from the advertiser's catalog + the user's carted SKUs ({{range .Products}}…{{else}}<static fallback>{{end}}); ad macros (${CLICK_URL} etc.) survive template execution. Validated at upload." }
                 landing_url: { type: string }
+                vast_tag_url: { type: string, description: "Video/audio only: a third-party VAST tag URL. The DSP bids a VAST 4.2 Wrapper (AdCOM protocol 14) whose VASTAdTagURI points here, with the platform's signed trackers injected at wrapper level; the player resolves the chain (no server-side fetch). Mutually exclusive with a hosted media asset. Must be an absolute http(s) URL." }
       responses:
         "201":
           description: Created
