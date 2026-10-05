@@ -43,7 +43,7 @@
             </div>
           </div>
         </div>
-        <span id="newCampaignBtn" class="hidden">{{ template "button" (dict "label" "+ New campaign" "onclick" "document.getElementById('newCampaign').classList.remove('hidden')") }}</span>
+        <span id="newCampaignBtn" class="hidden">{{ template "button" (dict "label" "+ New campaign" "onclick" "document.getElementById('newCampaign').classList.remove('hidden');renderSegmentPicker('nc_seg_inc',[]);renderSegmentPicker('nc_seg_exc',[])") }}</span>
       </div>
     </div>
 
@@ -872,9 +872,22 @@
       {{ template "form-field" (dict "label" "Inventory type (site, app)" "name" "nc_inv_inc" "placeholder" "blank = site + app") }}
       {{ template "form-field" (dict "label" "Channel include (display, video, audio, native, dooh, retail, ingame)" "name" "nc_chan_inc" "placeholder" "blank = all channels") }}
       {{ template "form-field" (dict "label" "Product category (retail — the product's own IAB category, for relevance)" "name" "nc_prodcat" "placeholder" "e.g. IAB18-5 — blank = use content targeting") }}
+      <!-- Audience pickers: checkboxes over the account's audiences (own +
+           marketplace-granted), stored as segment UUIDs. The raw input under
+           each is the ADVANCED escape hatch for free-form segment names (the
+           SSP ?segments= convention) and keeps the historical input ids so
+           collectSegments() unions both sources. -->
       <div class="grid grid-cols-2 gap-x-4">
-        {{ template "form-field" (dict "label" "Segment include (audience IDs)" "name" "nc_seg_inc" "placeholder" "auto_intenders") }}
-        {{ template "form-field" (dict "label" "Segment exclude" "name" "nc_seg_exc" "placeholder" "existing_customers") }}
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Segment include (audiences)</span>
+          <div id="nc_seg_inc_pick" class="mb-1 max-h-32 overflow-auto rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm space-y-1"></div>
+          <input id="nc_seg_inc" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs" placeholder="Advanced: raw ids/names, comma-separated" />
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Segment exclude</span>
+          <div id="nc_seg_exc_pick" class="mb-1 max-h-32 overflow-auto rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm space-y-1"></div>
+          <input id="nc_seg_exc" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs" placeholder="Advanced: raw ids/names, comma-separated" />
+        </label>
       </div>
       <div class="grid grid-cols-2 gap-x-4">
         {{ template "form-field" (dict "label" "Device bid modifiers (device:±%)" "name" "nc_mod_dev" "placeholder" "mobile:20, desktop:-10") }}
@@ -939,6 +952,13 @@
 <!-- Upload audience modal -->
 {{ template "modal-start" (dict "id" "newAudience" "title" "Upload audience") }}
   <form onsubmit="uploadAudience(event)">
+    <label class="block text-sm mb-3">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Audience</span>
+      <select id="au_target" onchange="audienceTargetChanged()" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+        <option value="">➕ Create new audience…</option>
+      </select>
+      <span class="block mt-1 text-[11px] text-gray-400">Pick an existing audience to <b>add members to it</b> — or create a new one below.</span>
+    </label>
     {{ template "form-field" (dict "label" "Name" "name" "au_name" "placeholder" "high-value-customers" "required" true) }}
     <div class="grid grid-cols-2 gap-x-4">
       <label class="block text-sm">
@@ -1218,9 +1238,18 @@
       {{ template "form-field" (dict "label" "Inventory type (site, app)" "name" "ec_inv_inc") }}
       {{ template "form-field" (dict "label" "Channel include (display, video, audio, native, dooh, retail, ingame)" "name" "ec_chan_inc") }}
       {{ template "form-field" (dict "label" "Product category (retail — the product's own IAB category)" "name" "ec_prodcat") }}
+      <!-- Audience pickers — same shape as the create form (see comment there). -->
       <div class="grid grid-cols-2 gap-x-4">
-        {{ template "form-field" (dict "label" "Segment include" "name" "ec_seg_inc") }}
-        {{ template "form-field" (dict "label" "Segment exclude" "name" "ec_seg_exc") }}
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Segment include (audiences)</span>
+          <div id="ec_seg_inc_pick" class="mb-1 max-h-32 overflow-auto rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm space-y-1"></div>
+          <input id="ec_seg_inc" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs" placeholder="Advanced: raw ids/names, comma-separated" />
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Segment exclude</span>
+          <div id="ec_seg_exc_pick" class="mb-1 max-h-32 overflow-auto rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm space-y-1"></div>
+          <input id="ec_seg_exc" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs" placeholder="Advanced: raw ids/names, comma-separated" />
+        </label>
       </div>
       <div class="grid grid-cols-2 gap-x-4">
         {{ template "form-field" (dict "label" "Device bid modifiers (device:±%)" "name" "ec_mod_dev") }}
@@ -1971,7 +2000,7 @@ async function createCampaign(ev) {
     include_os: csv('nc_os_inc'),
     include_keywords: csv('nc_kw_inc'), exclude_keywords: csv('nc_kw_exc'),
     include_inventory_type: csv('nc_inv_inc'),
-    include_segments: csv('nc_seg_inc'), exclude_segments: csv('nc_seg_exc'),
+    include_segments: collectSegments('nc_seg_inc'), exclude_segments: collectSegments('nc_seg_exc'),
   };
   for (const [k, v] of Object.entries(targeting)) if (v.length) body[k] = v;
   try {
@@ -2018,7 +2047,11 @@ function openEdit(id) {
   $('ec_inv_inc').value = join(inc.InventoryType);
   $('ec_chan_inc').value = join(inc.Channels);
   $('ec_prodcat').value = c.ProductCategory || '';
-  $('ec_seg_inc').value = join(inc.Segments); $('ec_seg_exc').value = join(exc.Segments);
+  // Segment pickers: known audience ids become checked boxes; anything the
+  // picker can't name (deleted audience, revoked grant, free-form SSP name)
+  // lands in the raw advanced input so nothing is silently dropped on save.
+  renderSegmentPicker('ec_seg_inc', inc.Segments || []);
+  renderSegmentPicker('ec_seg_exc', exc.Segments || []);
   const mods = c.Modifiers || {};
   $('ec_mod_dev').value = modMapToStr(mods.Device); $('ec_mod_geo').value = modMapToStr(mods.GeoCountry);
   $('ec_mod_tod').value = timeModsToStr(mods.TimeOfDay);
@@ -2082,7 +2115,7 @@ async function saveCampaign(ev) {
     include_inventory_type: csv('ec_inv_inc'),
     include_channels: csv('ec_chan_inc'),
     product_category: ($('ec_prodcat').value || '').trim(),
-    include_segments: csv('ec_seg_inc'), exclude_segments: csv('ec_seg_exc'),
+    include_segments: collectSegments('ec_seg_inc'), exclude_segments: collectSegments('ec_seg_exc'),
     // Always send bid_modifiers (empty object replaces) so clearing clears it.
     bid_modifiers: bidModifiersBody('ec_mod_dev', 'ec_mod_geo', 'ec_mod_tod') || {},
   };
@@ -2284,14 +2317,104 @@ async function inviteMember(ev) {
 
 // ---- Audiences ----
 const fmtMatchRate = (r) => r == null ? '<span class="text-gray-400">—</span>' : `${(r * 100).toFixed(0)}%`;
+// ---- Audience pickers (campaign targeting + upload modal) ----
+// One option list feeds every audience-picking surface: the campaign forms'
+// segment checkboxes and the upload modal's append-to-existing selector.
+// Own audiences come from /v1/api/audiences; licensed (marketplace-granted)
+// segments from /v1/api/marketplace/grants — each fetched best-effort so a
+// missing/forbidden grants read degrades to own-audiences-only.
+let audOptsCache = null;
+async function audienceOptions() {
+  if (audOptsCache) return audOptsCache;
+  const opts = [];
+  try {
+    (await fetchJSON('/v1/api/audiences') || []).forEach(a =>
+      opts.push({id: a.id, name: a.name, kind: 'own', visibility: a.visibility, type: a.type, members: a.members || 0}));
+  } catch (e) { /* audiences unavailable — picker shows empty-state */ }
+  try {
+    (await fetchJSON('/v1/api/marketplace/grants') || []).forEach(g => {
+      if (g.segment_id) opts.push({id: g.segment_id, name: (g.listing_name || g.segment_id) + ' · ' + (g.seller_name || 'licensed'), kind: 'licensed', members: null});
+    });
+  } catch (e) { /* no marketplace access — own audiences only */ }
+  audOptsCache = opts;
+  return opts;
+}
+
+// renderSegmentPicker fills `${prefix}_pick` with one checkbox per audience
+// (checked when its id is in `selected`). Ids the picker can't name — deleted
+// audiences, revoked grants, free-form SSP segment NAMES — are routed into
+// the raw advanced input (`#${prefix}`) so an edit round-trip never silently
+// drops them. collectSegments() unions both halves back on save.
+async function renderSegmentPicker(prefix, selected) {
+  const host = $(prefix + '_pick');
+  if (!host) return;
+  host.innerHTML = '<div class="text-xs text-gray-400">loading audiences…</div>';
+  const opts = await audienceOptions();
+  const sel = new Set(selected || []);
+  const known = new Set(opts.map(o => o.id));
+  $(prefix).value = (selected || []).filter(v => !known.has(v)).join(', ');
+  host.innerHTML = opts.length ? opts.map(o => `
+    <label class="flex items-center gap-2 cursor-pointer">
+      <input type="checkbox" data-id="${esc(o.id)}" ${sel.has(o.id) ? 'checked' : ''} />
+      <span class="truncate">${esc(o.name)}</span>
+      <span class="ml-auto shrink-0 text-[10px] px-1 rounded ${o.kind === 'licensed' ? 'bg-info/15 text-info' : 'bg-surface-3 text-gray-500'}">${o.kind === 'licensed' ? 'licensed' : (o.visibility === 'public' ? 'public' : 'private')}</span>
+      ${o.members != null ? `<span class="shrink-0 text-[10px] text-gray-400 font-mono">${fmtInt(o.members)}</span>` : ''}
+    </label>`).join('')
+    : '<div class="text-xs text-gray-400">No audiences yet — create one under Audiences.</div>';
+}
+
+// collectSegments: checked picker ids ∪ raw advanced CSV, deduped — the
+// payload shape (string array) is identical to the old free-text behaviour.
+function collectSegments(prefix) {
+  const out = [];
+  document.querySelectorAll('#' + prefix + '_pick input[type=checkbox]:checked')
+    .forEach(b => { if (!out.includes(b.dataset.id)) out.push(b.dataset.id); });
+  (($(prefix) && $(prefix).value) || '').split(',').map(s => s.trim()).filter(Boolean)
+    .forEach(v => { if (!out.includes(v)) out.push(v); });
+  return out;
+}
+
+// audienceTargetChanged: the upload modal's append-vs-create switch. Picking
+// an existing audience locks name/type/visibility to its values (the server
+// upserts by name, so this guarantees members land in THAT audience — the
+// "Diamond 2" typo guard); "create new" unlocks the fields.
+function audienceTargetChanged() {
+  const selEl = $('au_target');
+  if (!selEl) return;
+  const opt = selEl.options[selEl.selectedIndex];
+  const existing = selEl.value !== '';
+  const name = $('au_name'), type = $('au_type'), vis = $('au_visibility');
+  if (existing) {
+    name.value = opt.dataset.name; name.readOnly = true;
+    type.value = opt.dataset.type || 'first_party'; type.disabled = true;
+    vis.value = opt.dataset.visibility || 'dsp_private'; vis.disabled = true;
+  } else {
+    name.value = ''; name.readOnly = false;
+    type.disabled = false;
+    vis.disabled = false;
+  }
+}
+
 async function loadAudiences() {
   loadMappings();
   loadProviders();
   loadIngestHistory();
   loadRetargeting();
+  // The audience list changed (or may have): refresh every picker's source.
+  audOptsCache = null;
   const tbody = tbodyOf('audiences');
   try {
     const list = await fetchJSON('/v1/api/audiences') || [];
+    // Upload modal's append-to-existing selector rides the same fetch.
+    const tgt = $('au_target');
+    if (tgt) {
+      const cur = tgt.value;
+      tgt.innerHTML = '<option value="">➕ Create new audience…</option>' + list.map(a =>
+        `<option value="${esc(a.id)}" data-name="${esc(a.name)}" data-type="${esc(a.type)}" data-visibility="${esc(a.visibility)}">${esc(a.name)} (${fmtInt(a.members)} members)</option>`).join('');
+      tgt.value = cur;
+      if (tgt.selectedIndex < 0) tgt.selectedIndex = 0;
+      audienceTargetChanged();
+    }
     tbody.innerHTML = list.length ? list.map(a => `
       <tr class="border-t border-gray-100 dark:border-gray-800">
         <td class="px-3 py-2 font-medium">${esc(a.name)}</td>
