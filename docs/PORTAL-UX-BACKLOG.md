@@ -10,6 +10,28 @@ the dead component-`onclick` fix (`5afc03c`).
 Ordering = recommended order of attack. Effort: S (<½ day) / M (day-ish) /
 L (multi-day).
 
+## Status — SHIPPED 2026-10-05 (all but one)
+
+Worked the whole list in one pass; deployed + live-verified (`make test-portal`
+green against the stack, e2e regression incl. metadata-preservation green).
+
+| # | Item | State |
+|---|---|---|
+| 1 | Background writers must not rewrite segment metadata (the visibility-flip bug) | ✅ `4419a1d` |
+| 2 | "Targeted by" column | ✅ |
+| 3 | Unwired-upload warning | ✅ |
+| 4 | Campaign edit as its own `#campaign/<id>` page | ✅ |
+| 5 | Serving-sync chip | ✅ |
+| 6 | Case-insensitive duplicate-name guard (409 + retarget) | ✅ |
+| 7 | "Test a hash" box | ✅ |
+| 8 | Member sample + source + per-row `graph_known` | ✅ |
+| 9 | Unmatched-rows detail | 🟨 PARTIAL — member-level `graph_known` is the match report per member (`/v1/api/audiences/members`); the ingest-JOB-level "these N rows didn't match + why" breakdown is still open |
+| 10 | `make test-portal` chromedp suite | ✅ |
+| 11 | identity-resolution on by default (internal DSP) | ✅ |
+
+Bonus not on the original list: hot-path micro-benchmark harness + tracking
+(`/perf-microbench` skill, `make bench`) — see `docs/perf/bench/`.
+
 ## 1. Background writers must not rewrite segment metadata — **BUG, do first** (S)
 
 `pkg/audience/store/postgres` `UpsertSegment` ON CONFLICT overwrites
