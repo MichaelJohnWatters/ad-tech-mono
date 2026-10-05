@@ -112,3 +112,5 @@ perf-archives/
 
 # Micro-benchmark transient run output (baseline.txt is committed)
 docs/perf/bench/.last.txt
+docs/perf/bench/profiles/
+docs/perf/bench/history/

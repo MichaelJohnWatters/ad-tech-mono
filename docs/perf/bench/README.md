@@ -11,7 +11,35 @@ commit at PR time** — no cluster, Redis, or NATS.
 ```sh
 make bench        # run + diff vs baseline.txt (benchstat; auto-installed once)
 make bench-pin    # re-pin baseline.txt after a known-good change (commit it)
+make bench-profile BENCH=BenchmarkExchangeAuction/bids=100 PKG=./pkg/auction
+                  # CPU+mem profile ONE bench → top hotspots (the "where")
 ```
+
+**Comparability guard:** `make bench` ABORTS if Rancher Desktop / the local
+cluster is up — a running stack burns most of the cores and poisons the
+numbers. Stop the stack first, or `BENCH_ALLOW_STACK=1 make bench` to override
+(never for a committed baseline). This is why `baseline.txt` must be pinned on
+a quiet host.
+
+**History ledger:** every `make bench` appends one SHA-stamped record
+(`{stamp, sha, go, benches:{ns/op, B/op, allocs/op}}`) to the committed
+`history.jsonl` — track a function's cost across commits, not just vs the
+single baseline. Raw per-run output + profiles live under `history/` and
+`profiles/` (gitignored).
+
+## Profiles — different ad types / data shapes
+
+Beyond input-size sweeps, the `*Profiles` benches exercise DISTINCT code paths:
+
+| Bench | Profiles | Why they differ |
+|---|---|---|
+| `BenchmarkExchangeAuctionProfiles` | `display-open` (single-winner first-price), `retail-grid` (relevance-weighted multi-winner) | different auction STRATEGY per channel |
+| `BenchmarkDSPBidPathProfiles` | `broad` (geo/device), `dense` (segments+categories+keywords), `video` (non-display path) | targeting-eval cost scales with how much targeting the request carries |
+
+Add a row to profile another shape (video pod, DOOH time-slot, native) — the
+auction engine picks its strategy from the request, so a profile is just the
+right request + bid fixture. (Code-committed; baseline rows for these land on
+the next quiet-host `make bench-pin`.)
 
 ## What's covered (the selection rule: hot × pure × isolatable)
 

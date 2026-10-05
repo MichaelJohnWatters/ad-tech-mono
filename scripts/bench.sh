@@ -24,6 +24,26 @@ OUTDIR=docs/perf/bench
 BASELINE=$OUTDIR/baseline.txt
 mkdir -p "$OUTDIR"
 
+# Comparability guard: the local stack (Rancher Desktop + the adtech pods) burns
+# ~8 of 10 cores at idle and thrashes the VM page cache — a micro-bench run
+# alongside it produces noisy, incomparable numbers (the same reason perfbench
+# has hands-off-host rules). Abort unless the operator explicitly opts in.
+# Override: BENCH_ALLOW_STACK=1 make bench.
+guard_stack() {
+  [ "${BENCH_ALLOW_STACK:-0}" = "1" ] && return
+  local running=""
+  if pgrep -qfi "Rancher Desktop" 2>/dev/null; then running="Rancher Desktop app"; fi
+  if [ -z "$running" ] && pgrep -qfi "lima|qemu-system|rancher-desktop" 2>/dev/null; then running="Rancher Desktop VM"; fi
+  # Cheapest positive confirmation: the cluster answers.
+  if [ -z "$running" ] && kubectl cluster-info >/dev/null 2>&1; then running="a reachable k8s cluster"; fi
+  if [ -n "$running" ]; then
+    echo "[bench] ABORT: $running is up — it competes for CPU/VM and poisons micro-bench numbers." >&2
+    echo "[bench] Stop Rancher Desktop first (comparability), or set BENCH_ALLOW_STACK=1 to override." >&2
+    exit 2
+  fi
+}
+guard_stack
+
 # -benchtime=2x-ish via count; -count=6 gives benchstat enough samples to judge
 # significance. -run=^$ skips normal tests. -benchmem: allocs are the usual
 # hot-loop regression.
@@ -43,6 +63,32 @@ ensure_benchstat() {
   BENCHSTAT=""  # offline / install failed — degrade to raw output, no diff
 }
 
+# --profile <BenchRegex> [pkg]: run ONE bench with CPU+mem profiling and print
+# the top hotspots (which line burns time / allocates). This is the "now show
+# me WHERE" step after make bench flags a regression. Profiles land in
+# docs/perf/bench/profiles/ (gitignored) for `go tool pprof` drill-down / flame
+# graphs (go tool pprof -http=:0 <profile>).
+if [ "${1:-}" = "--profile" ]; then
+  re="${2:?usage: bench.sh --profile <BenchRegex> [pkg]}"
+  pkg="${3:-./pkg/auction}"
+  pdir=$OUTDIR/profiles
+  mkdir -p "$pdir"
+  cpu="$pdir/cpu.out"; mem="$pdir/mem.out"
+  echo "[bench] profiling $re in $pkg (cpu+mem)…"
+  go test "$pkg" -run '^$' -bench "$re" -benchmem -benchtime=3s \
+    -cpuprofile "$cpu" -memprofile "$mem" -o "$pdir/bench.test" 2>&1 \
+    | grep -vE '^(ok|PASS|goos:|goarch:|pkg:|cpu:)' || true
+  echo
+  echo "[bench] top CPU (cum):"
+  go tool pprof -top -cum -nodecount=12 "$pdir/bench.test" "$cpu" 2>/dev/null | sed -n '1,18p' || true
+  echo
+  echo "[bench] top allocations (alloc_space):"
+  go tool pprof -top -sample_index=alloc_space -nodecount=12 "$pdir/bench.test" "$mem" 2>/dev/null | sed -n '1,18p' || true
+  echo
+  echo "[bench] drill down: go tool pprof -http=:0 $pdir/bench.test $cpu   (or $mem)"
+  exit 0
+fi
+
 if [ "${1:-}" = "--pin" ]; then
   echo "[bench] running + pinning baseline → $BASELINE"
   run_bench | tee "$BASELINE"
@@ -53,6 +99,40 @@ fi
 NEW="$OUTDIR/.last.txt"
 echo "[bench] running hot-path benches…"
 run_bench | tee "$NEW"
+
+# Append one SHA-stamped record to the committed ledger (the micro-bench
+# analogue of perfbench's runs.jsonl): git sha + dirty flag + date + go
+# version + per-bench averaged ns/op·B/op·allocs/op. Lets you track a
+# function's cost ACROSS commits, not just against the single baseline. Raw
+# per-run output is kept under history/ (gitignored) for pprof-less eyeballing.
+record_history() {
+  local sha dirty; sha="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+  [ -n "$(git status --porcelain 2>/dev/null)" ] && dirty="+dirty" || dirty=""
+  local stamp; stamp="$(TZ=UTC date +%Y%m%dT%H%M%SZ)"
+  mkdir -p "$OUTDIR/history"
+  cp "$NEW" "$OUTDIR/history/${stamp}-${sha}${dirty}.txt"
+  NEW="$NEW" SHA="${sha}${dirty}" STAMP="$stamp" GOV="$(go version | awk '{print $3}')" \
+    python3 - "$LEDGER" <<'PY'
+import json, re, os, sys, collections
+ledger = sys.argv[1]
+rows = collections.defaultdict(lambda: collections.defaultdict(list))
+pat = re.compile(r'^(Benchmark\S+)\s')
+for line in open(os.environ["NEW"]):
+    m = pat.match(line)
+    if not m: continue
+    name = m.group(1)
+    for val, unit in re.findall(r'([\d.]+)\s+(ns/op|B/op|allocs/op|\S+/sec)', line):
+        rows[name][unit].append(float(val))
+benches = {n: {u: round(sum(v)/len(v), 2) for u, v in units.items()} for n, units in rows.items()}
+rec = {"stamp": os.environ["STAMP"], "sha": os.environ["SHA"],
+       "go": os.environ["GOV"], "benches": benches}
+with open(ledger, "a") as f:
+    f.write(json.dumps(rec) + "\n")
+print(f"[bench] recorded {len(benches)} benches @ {os.environ['SHA']} → {ledger}")
+PY
+}
+LEDGER="$OUTDIR/history.jsonl"
+record_history || echo "[bench] history record skipped"
 
 if [ ! -f "$BASELINE" ]; then
   echo "[bench] no baseline yet — run 'make bench-pin' to create $BASELINE"
