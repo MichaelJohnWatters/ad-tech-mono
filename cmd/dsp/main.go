@@ -1368,6 +1368,18 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 			return
 		}
 
+		// OpenRTB §4.3: video/audio bids carry the creative as VAST XML in adm
+		// (MediaURL stays as the back-compat ext). Built here on the FINAL
+		// winner only — never inside the per-campaign loop (hot-path iron
+		// rule), and it's a pure in-memory marshal. Protocol declares the
+		// emitted document honestly (AdCOM 13 = VAST 4.2).
+		if reqFormat == "video" || reqFormat == "audio" {
+			if adm, ok := buildMediaAdM(bestCampaign, bestBid, reqFormat); ok {
+				bestBid.AdM = adm
+				bestBid.Protocol = openrtb.ProtocolVAST42
+			}
+		}
+
 		resp := openrtb.BidResponse{
 			ID:  bidReq.ID,
 			Cur: bestCampaign.Currency,

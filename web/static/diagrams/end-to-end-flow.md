@@ -31,21 +31,22 @@ sequenceDiagram
     Note over EX: ads.txt gate · 🔗 schain validate ·<br/>🔗 ads.cert SIGN (Source.ext.adcert + ts)
     EX->>DSP: POST /v1/openrtb/bid (fan-out, smart-routed)
     Note over DSP: 🔗 ads.cert verify + freshness ·<br/>🔒 privacy.Evaluate (consent gate) ·<br/>🎯 resolve UID2→linked ids→segments ·<br/>targeting + pacing + budget + shade
-    DSP-->>EX: bid (AdM: banner HTML / MediaURL / native markup)
+    DSP-->>EX: bid (AdM: banner HTML / VAST 4.2 (video+audio, protocol 13) / native markup; MediaURL = fallback ext)
+    Note over EX: 🎬 §4.4 win-time macro substitution in adm<br/>(${AUCTION_PRICE} = clearing price)
     Note over EX: auction (deal priority: PG>Pref>PMP>Open)
     EX-->>N: adtech.auction.win 🔒 (single source of truth for cost)
     EX-->>SSP: BidResponse (winner)
     alt display
         SSP->>AS: POST /v1/ad/serve → rendered HTML + signed trackers
     else video
-        PA->>PA: build VAST 4.2 + 🎬 OMID <AdVerifications> + signed trackers
+        PA->>PA: parse winner's VAST-in-adm + inject signed trackers<br/>(fallback: build VAST 4.2 from MediaURL) + 🎬 OMID <AdVerifications><br/>+ 🎬 IAB bracket macros ([ERRORCODE]/[CACHEBUSTING]/<br/>[TIMESTAMP]/[ADPLAYHEAD] — unsigned, player-substituted)
     else native 🎬
         PA->>PA: render native card + signed impression/click trackers
     end
     SSP-->>PA: HTML / VAST / native fragment
     PA-->>B: ad markup
-    B->>TR: GET /v1/t/imp|click|view (HMAC-signed URLs)
-    Note over TR: verify sig · server-authoritative IAB viewability
+    B->>TR: GET /v1/t/imp|click|view|video (HMAC-signed URLs)
+    Note over TR: verify sig (bracket-macro params excluded) ·<br/>server-authoritative IAB viewability ·<br/>🎬 VAST error codes → media_events.error_code
     TR-->>N: adtech.events.impression|click|view
     Note over N: Reporting: analytics + billing accrual<br/>(reserve/settle per bid model)
 ```
@@ -85,7 +86,7 @@ sequenceDiagram
 | 🔗 Trust | ads.txt · app-ads.txt · sellers.json · schain · **ads.cert** (sign+ts+key dist) | `pkg/fraud`, `cmd/adstxt`/`appadstxt`, `cmd/gateway/sellers.go`, `pkg/openrtb/schain.go`, `pkg/adcert` |
 | 🔒 Privacy | TCF · USP · GDPR/CCPA/COPPA · GPC · GPP | `pkg/privacy` (`Signals`, `gpp.go`), SSP `applyPrivacySignals`, DSP `Evaluate` |
 | 🎯 Identity | UID2 (`User.EIDs`) · identity graph (observe→consume→resolve) | `pkg/openrtb/eid.go`, `pkg/identityobserve`, `cmd/identity-consumer`, DSP `cmd/dsp/identity.go` |
-| 🎬 Formats | OpenRTB Native 1.2 · VAST 4.2 + OMID | `pkg/native`, `pkg/vast`, `cmd/publisher-adserver` |
+| 🎬 Formats | OpenRTB Native 1.2 · VAST 4.2 + OMID · VAST §6 bracket macros + §2.3.6.3 error codes | `pkg/native`, `pkg/vast` (`macros.go`), `cmd/publisher-adserver`, `cmd/tracker` (`mediaSigParams`) |
 | Classification | IAB Content Taxonomy 1.0 | `pkg/taxonomy` |
 
 See `docs/STANDARDS.md` for per-standard status and the change log.

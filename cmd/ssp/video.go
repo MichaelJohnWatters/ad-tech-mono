@@ -1,6 +1,41 @@
 package main
 
-import "github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
+import (
+	"log/slog"
+
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
+)
+
+// admForMediaServe returns the winner's adm for the video/audio serve
+// response, validating the bid's declared protocol against the imp's
+// advertised set (OpenRTB: a buyer must not return a creative subtype the
+// request didn't offer). On mismatch the adm is DROPPED with a warning — the
+// MediaURL fallback still serves and the settled win stands (the auction
+// already cleared; billing is the AuctionWinEvent, never a hard reject here).
+// Protocol 0 (undeclared, legacy bidders) passes through ungated.
+func admForMediaServe(ac auctionContext, winner openrtb.BidObj, reqLog *slog.Logger) string {
+	if winner.AdM == "" || winner.Protocol == 0 || len(ac.BidReq.Imp) == 0 {
+		return winner.AdM
+	}
+	var accepted []int
+	switch {
+	case ac.BidReq.Imp[0].Video != nil:
+		accepted = ac.BidReq.Imp[0].Video.Protocols
+	case ac.BidReq.Imp[0].Audio != nil:
+		accepted = ac.BidReq.Imp[0].Audio.Protocols
+	}
+	if len(accepted) == 0 {
+		return winner.AdM
+	}
+	for _, p := range accepted {
+		if p == winner.Protocol {
+			return winner.AdM
+		}
+	}
+	reqLog.Warn("winner protocol not in requested set — dropping adm, MediaURL fallback serves",
+		"protocol", winner.Protocol, "accepted", accepted, "crid", winner.CrID)
+	return ""
+}
 
 // buildVideoImp constructs the video object for a bid request's impression,
 // starting from the platform's standard pre-roll defaults and overriding only
@@ -12,8 +47,13 @@ import "github.com/MichaelJohnWatters/ad-tech-mono/pkg/openrtb"
 // linearity (int), w, h (int), mimes ([]string), protocols ([]int).
 func buildVideoImp(cfg map[string]any) *openrtb.Video {
 	v := &openrtb.Video{
-		Mimes:       []string{"video/mp4", "video/webm"},
-		Protocols:   []int{2, 3, 5, 6, 7}, // VAST 2-4.2
+		Mimes: []string{"video/mp4", "video/webm"},
+		// AdCOM "Creative Subtypes — Audio/Video" ids (what OpenRTB 2.6
+		// references): 2=VAST 2.0, 3=VAST 3.0, 7=VAST 4.0, 11=VAST 4.1,
+		// 13=VAST 4.2, 14=VAST 4.2 Wrapper. The old list used non-standard
+		// 5/6/7 for 4.0/4.1/4.2 — fixed for spec interop; both ends we own
+		// (DSP/extbidder) flip in the same commit.
+		Protocols:   []int{2, 3, 7, 11, 13, 14},
 		W:           640,
 		H:           360,
 		MinDuration: 5,

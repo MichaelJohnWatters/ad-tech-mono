@@ -67,6 +67,10 @@ type FakeDSPOpts struct {
 	// Seat is the advertiser/account UUID returned on the bid. Defaults to
 	// "fake-seat" if empty; tests that assert on the seat should set this.
 	Seat string
+	// BidMutate, when set, edits the bid object before it's returned —
+	// lets a test shape the external buyer's response (VAST-in-adm,
+	// protocol declaration, media URL) without new modes per field.
+	BidMutate func(bid *openrtb.BidObj, req openrtb.BidRequest)
 }
 
 // NewFakeDSP spins up an httptest server and registers cleanup. URL is
@@ -107,18 +111,22 @@ func NewFakeDSP(t *testing.T, opts FakeDSPOpts) *FakeDSP {
 		if len(bidReq.Imp) > 0 {
 			impID = bidReq.Imp[0].ID
 		}
+		bid := openrtb.BidObj{
+			ID:    "fake-bid",
+			ImpID: impID,
+			Price: opts.BidPrice,
+			CID:   "fake-campaign",
+			CrID:  "fake-creative",
+		}
+		if opts.BidMutate != nil {
+			opts.BidMutate(&bid, bidReq)
+		}
 		resp := openrtb.BidResponse{
 			ID:  bidReq.ID,
 			Cur: "USD",
 			SeatBid: []openrtb.SeatBid{{
 				Seat: seat,
-				Bid: []openrtb.BidObj{{
-					ID:    "fake-bid",
-					ImpID: impID,
-					Price: opts.BidPrice,
-					CID:   "fake-campaign",
-					CrID:  "fake-creative",
-				}},
+				Bid:  []openrtb.BidObj{bid},
 			}},
 		}
 		w.Header().Set("Content-Type", "application/json")

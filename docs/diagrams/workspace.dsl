@@ -79,7 +79,7 @@ workspace "Ad Tech Mono" "C4 model of the full-stack programmatic advertising pl
         pub_pacing            = component "Delivery Pacing Manager" "Redis per-line-item impression actuals; flags guaranteed items behind pace (PacingDecider). (pkg/publisheradserver/pacing)" "Go" "svc:pubAdserver"
         pub_prebidFanout      = component "Prebid Fan-Out Client" "Parallel OpenRTB requests to external Prebid Servers; selects the highest non-nobid bid. (pkg/publisheradserver/prebidclient)" "Go" "svc:pubAdserver"
         pub_sspClient         = component "SSP Demand Client" "Calls our SSP /v1/ssp/serve for the programmatic auction (exchange → DSPs), channel-aware. (cmd/publisher-adserver)" "Go" "svc:pubAdserver"
-        pub_formatHandlers    = component "Format Handlers" "Renders the winner as VAST/VMAP (video), native JSON, audio VAST, or display HTML with signed tracker URLs. (cmd/publisher-adserver/vast.go, vmap.go, native.go, audio.go)" "Go" "svc:pubAdserver"
+        pub_formatHandlers    = component "Format Handlers" "Renders the winner as VAST/VMAP (video), native JSON, audio VAST, or display HTML with signed tracker URLs. Video/audio: parses the winner's bid.adm VAST and injects platform trackers (pkg/vast Parse/Inject; adFromWinner), MediaURL local build as fallback. (cmd/publisher-adserver/vast.go, vmap.go, native.go, audio.go)" "Go" "svc:pubAdserver"
         pub_eventPub          = component "Event Publisher" "Publishes DirectWin / PrebidOutboundWin / ServeNoFill for analytics. (cmd/publisher-adserver, pkg/events)" "Go" "svc:pubAdserver"
       }
       tracker     = container "Tracker" "Impression/click/conversion/view beacons, real-time fraud checks, publishes events." "Go" {

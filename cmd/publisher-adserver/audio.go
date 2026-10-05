@@ -33,7 +33,7 @@ import (
 // Modern audio ad serving uses VAST 4.x audio MediaFiles rather than the
 // deprecated DAAST document, so we reuse pkg/vast — the only difference from
 // video is the MediaFile MIME type and the beacon endpoint.
-func audioHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
+func audioHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stubFn func() bool, houseAdFn houseAdLookup, consumeAdMFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -51,14 +51,14 @@ func audioHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stubF
 		}
 
 		winner, err := fetchAudioWinner(ctx, sspURL, placementID, traceID, r.URL.Query())
-		if err != nil || winner == nil || winner.NoBid || winner.MediaURL == "" {
+		if err != nil || winner == nil || winner.NoBid || (winner.MediaURL == "" && winner.AdM == "") {
 			switch {
 			case err != nil:
 				reqLog.Warn("audio auction failed", "error", err)
 			case winner == nil || winner.NoBid:
 				reqLog.Info("audio auction: no bid")
 			default:
-				reqLog.Warn("winner had empty MediaURL", "crid", winner.CreativeID)
+				reqLog.Warn("winner had neither adm nor MediaURL", "crid", winner.CreativeID)
 			}
 			serveAudioNoBid(w, reqLog, stubFn, houseAdFn, traceID)
 			return
@@ -91,7 +91,14 @@ func audioHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, stubF
 		// Re-host the audio media URL on an HTTPS ingress request; no-op otherwise.
 		winner.MediaURL = rewriteHostIfSecure(r, winner.MediaURL, secureBase)
 		spec := buildAudioVASTSpec(winner, macroCtx)
-		xmlBytes, err := vast.BuildLinearAd(spec)
+		// Standard path: serve the winner's bid.adm VAST (audio rides the same
+		// §4.3 contract as video) with our trackers injected; else local build.
+		ad, ok := adFromWinner(r, winner, spec, consumeAdMFn(), secureBase, reqLog)
+		if !ok {
+			serveAudioNoBid(w, reqLog, stubFn, houseAdFn, traceID)
+			return
+		}
+		xmlBytes, err := vast.BuildDocument([]vast.Ad{ad})
 		if err != nil {
 			reqLog.Error("audio vast build failed", "error", err)
 			http.Error(w, "audio vast build failed", http.StatusInternalServerError)

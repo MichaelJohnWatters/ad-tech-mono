@@ -126,7 +126,8 @@ detail, and the change log at the bottom has commit-level notes.
 | OMID / Open Measurement | IAB Tech Lab | Viewability/verification | 🔴 | 🟨 | Server-side done: SSP signals `api:[7]` OMID, publisher-adserver emits `<AdVerifications>` (OM SDK script + signed verificationNotExecuted beacon) in VAST via `pkg/vast`, gated by `publisher_adserver.omid_verification_url`. Client-side OM SDK runtime (session JS) is out of scope (no OM SDK in-repo) |
 | SIMID 1.1 | IAB Tech Lab | Interactive video (VPAID successor) | 🟡 | 🟨 | Struct in `pkg/vast`; no runtime |
 | VPAID 2.0 | IAB Tech Lab | Interactive video (legacy) | 🟠 | 🟨 | Signal codes only. **Deprecated — skip, go to SIMID+OMID** |
-| VAST audio / DAAST | IAB Tech Lab | Podcast/streaming audio | 🟡 | 🟨 | Audio object + DAAST protocol codes; no dedicated pipeline |
+| VAST-in-adm (OpenRTB §4.3) + §4.4 auction macros | IAB Tech Lab | Standard video/audio bid markup | 🔴 | ✅ | DSP bids VAST 4.2 in `bid.adm` (protocol 13, `cmd/dsp/vastadm.go`); exchange substitutes `${AUCTION_PRICE}`/`${AUCTION_ID}`/`${AUCTION_CURRENCY}` at win time with the CLEARING price (`cmd/exchange/macros.go`); SSP forwards adm gated on the imp's AdCOM protocols; publisher-adserver parses + injects platform trackers (`pkg/vast/parse.go`, `adFromWinner`); `bid.media` ext demoted to fallback. Protocol enums fixed to the AdCOM table (13=VAST 4.2, old nonstandard 5/6/7 retired) |
+| VAST audio / DAAST | IAB Tech Lab | Podcast/streaming audio | 🟡 | ✅ | Audio rides VAST 4.2 audio MediaFiles end-to-end (DAAST emission retired 2026-10-05 — extbidder now bids VAST audio; SSP still advertises AdCOM 9/10 for third parties) |
 | SSAI (server-side ad insertion) | pattern | CTV/streaming | 🔴 | 🟨 | VMAP breaks auction independently; no stitching layer |
 | DOOH / OpenOOH | IAB Tech Lab / OpenOOH | Out-of-home | 🟡 | ⬜ | Stubbed in `pkg/auction/timeslot.go` (TODO) |
 

@@ -31,14 +31,15 @@ sequenceDiagram
     Note over EX: ads.txt gate · 🔗 schain validate ·<br/>🔗 ads.cert SIGN (Source.ext.adcert + ts)
     EX->>DSP: POST /v1/openrtb/bid (fan-out, smart-routed)
     Note over DSP: 🔗 ads.cert verify + freshness ·<br/>🔒 privacy.Evaluate (consent gate) ·<br/>🎯 resolve UID2→linked ids→segments ·<br/>targeting + pacing + budget + shade
-    DSP-->>EX: bid (AdM: banner HTML / MediaURL / native markup)
+    DSP-->>EX: bid (AdM: banner HTML / VAST 4.2 (video+audio, protocol 13) / native markup; MediaURL = fallback ext)
+    Note over EX: 🎬 §4.4 win-time macro substitution in adm<br/>(${AUCTION_PRICE} = clearing price)
     Note over EX: auction (deal priority: PG>Pref>PMP>Open)
     EX-->>N: adtech.auction.win 🔒 (single source of truth for cost)
     EX-->>SSP: BidResponse (winner)
     alt display
         SSP->>AS: POST /v1/ad/serve → rendered HTML + signed trackers
     else video
-        PA->>PA: build VAST 4.2 + 🎬 OMID <AdVerifications> + signed trackers<br/>+ 🎬 IAB bracket macros ([ERRORCODE]/[CACHEBUSTING]/<br/>[TIMESTAMP]/[ADPLAYHEAD] — unsigned, player-substituted)
+        PA->>PA: parse winner's VAST-in-adm + inject signed trackers<br/>(fallback: build VAST 4.2 from MediaURL) + 🎬 OMID <AdVerifications><br/>+ 🎬 IAB bracket macros ([ERRORCODE]/[CACHEBUSTING]/<br/>[TIMESTAMP]/[ADPLAYHEAD] — unsigned, player-substituted)
     else native 🎬
         PA->>PA: render native card + signed impression/click trackers
     end

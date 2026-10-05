@@ -5961,6 +5961,13 @@ $10-20 CPM                       $15-25 CPM                      $20-50 CPM
 
 VAST is the IAB standard XML format for video ad serving. When a video player needs to show an ad, it requests a VAST XML document that describes what to play and how to track it.
 
+**Standards-compliance notes (2026-10-05 epic):**
+
+- **VAST-in-adm is the standard path.** The DSP bids the full VAST 4.2 document in `bid.adm` (OpenRTB §4.3, `bid.protocol=13`, built once on the winning candidate in `cmd/dsp/vastadm.go`); the exchange substitutes the §4.4 auction macros (`${AUCTION_PRICE}` = the CLEARING price post-shading, `${AUCTION_ID}`, `${AUCTION_CURRENCY}`) into the winner's adm; the SSP forwards adm gated on the imp's advertised AdCOM protocols; the publisher-adserver parses the buyer's document and **injects the platform's signed trackers alongside the buyer's own** (`pkg/vast/parse.go` Parse/InjectLinearTrackers, `adFromWinner`). The `bid.media` MediaURL extension is demoted to the fallback the local build uses when adm is absent/unparseable/protocol-mismatched (live kill switch `publisher_adserver.consume_adm`).
+- **The DSP's own adm carries NO trackers/pricing** by decision: the platform's cost truth is the AuctionWinEvent and DSP beacons would be cluster-unreachable; the buyer-tracks-own-delivery slot is exercised by `cmd/extbidder`, whose adm impression carries `${AUCTION_PRICE}` (the e2e asserts the exchange substituted it).
+- **Protocol enums follow AdCOM** ("Creative Subtypes — Audio/Video"): 13 = VAST 4.2, 14 = 4.2 Wrapper, 9/10 = DAAST (advertised for third parties only — DAAST emission is retired; audio rides VAST 4.x audio MediaFiles).
+- **IAB bracket macros** (`[ERRORCODE]`/`[CACHEBUSTING]`/`[TIMESTAMP]`/`[ADPLAYHEAD]`, VAST 4.2 §6) ride every media tracking URI as UNSIGNED params appended after the HMAC (`adserving.AppendClientMacroParams`); the tracker excludes exactly those from signature validation (`mediaSigParams`) and records player-substituted error codes into `media_events.error_code` (literal macro → 900 per §2.3.6.3).
+
 **VAST response from our Ad Server:**
 
 ```xml

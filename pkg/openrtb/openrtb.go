@@ -103,7 +103,7 @@ type Banner struct {
 // bid requests serialise identically.
 type Video struct {
 	Mimes          []string    `json:"mimes,omitempty"`
-	Protocols      []int       `json:"protocols,omitempty"` // VAST versions supported (2=VAST 2.0, 3=VAST 3.0, 5=VAST 4.0, 6=VAST 4.1, 7=VAST 4.2)
+	Protocols      []int       `json:"protocols,omitempty"` // AdCOM creative subtypes: 1=VAST 1.0, 2=VAST 2.0, 3=VAST 3.0, 4-6=wrappers 1-3, 7=VAST 4.0, 8=4.0 Wrapper, 9=DAAST 1.0, 10=DAAST Wrapper, 11=VAST 4.1, 12=4.1 Wrapper, 13=VAST 4.2, 14=4.2 Wrapper
 	W              int         `json:"w,omitempty"`
 	H              int         `json:"h,omitempty"`
 	MinDuration    int         `json:"minduration,omitempty"`
@@ -388,7 +388,7 @@ type BidObj struct {
 	NURL    string   `json:"nurl,omitempty"` // win notice URL
 	LURL    string   `json:"lurl,omitempty"` // loss notice URL
 	BURL    string   `json:"burl,omitempty"` // billing notice URL (fires when SSP records billable event — for video/audio this is when the player counts the impression, not just receives the bid)
-	AdM     string   `json:"adm,omitempty"`  // ad markup (display HTML for banners; VAST XML for video; DAAST XML for audio)
+	AdM     string   `json:"adm,omitempty"`  // ad markup (display HTML for banners; VAST XML for video AND audio — OpenRTB 2.6 §4.3; DAAST retired)
 	ADomain []string `json:"adomain,omitempty"`
 	CID     string   `json:"cid,omitempty"`  // campaign ID (line item)
 	CrID    string   `json:"crid,omitempty"` // creative ID
@@ -415,9 +415,20 @@ type BidObj struct {
 	BidModel string `json:"bm,omitempty"`
 	// MediaURL is a non-standard extension carrying the video/audio
 	// MediaFile URL from the DSP through the exchange back to the SSP.
-	// Standard OpenRTB expects the DSP to put the full VAST XML in AdM,
-	// but our DSPs don't generate VAST — they just ship the media URL
-	// and the publisher-adserver assembles the VAST. Empty for display
-	// bids.
+	// Standard OpenRTB carries the full VAST XML in AdM — our DSP does
+	// that too now (see cmd/dsp buildMediaAdM) — but MediaURL stays as
+	// the back-compat fallback the publisher-adserver hand-builds VAST
+	// from when AdM is absent or unparseable. Empty for display bids.
 	MediaURL string `json:"media,omitempty"`
 }
+
+// AdCOM "Creative Subtypes — Audio/Video" ids used in Imp.Video.Protocols /
+// Imp.Audio.Protocols and echoed on BidObj.Protocol (OpenRTB 2.6 references
+// this list). Only the ids the platform actually emits get names.
+const (
+	ProtocolVAST40        = 7
+	ProtocolDAAST10       = 9
+	ProtocolVAST41        = 11
+	ProtocolVAST42        = 13
+	ProtocolVAST42Wrapper = 14
+)

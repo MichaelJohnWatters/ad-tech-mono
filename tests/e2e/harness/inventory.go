@@ -145,3 +145,26 @@ ON CONFLICT (id) DO UPDATE SET floor_price = EXCLUDED.floor_price, format = 'vid
 	})
 	return Placement{ID: id, ExternalID: externalKey, PublisherID: pub.ID, FloorPrice: floor, Width: 640, Height: 360}
 }
+
+// AddVideoPlacementProtocols is AddVideoPlacement with an explicit AdCOM
+// protocols list in the video_config — used to prove the SSP's winner
+// protocol gate (e.g. protocols [2] = VAST 2.0 only rejects a 4.2 adm).
+func (h *Harness) AddVideoPlacementProtocols(t *testing.T, pub Publisher, externalKey string, floor float64, minDur, maxDur int, protocols []int) Placement {
+	t.Helper()
+	id := idgen.Derive("placement", externalKey)
+	videoJSON, _ := json.Marshal(map[string]any{
+		"skippable": false, "min_duration": minDur, "max_duration": maxDur,
+		"plcmt": 3, "mimes": []string{"video/mp4"}, "protocols": protocols,
+	})
+	h.WithTenant(t, pub.AccountID, func(tx *sql.Tx) {
+		const q = `
+INSERT INTO placements (id, publisher_id, account_id, name, format, width, height, floor_price, floor_currency, page_url_pattern, status, video_config, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'video', 640, 360, $5, 'USD', $6, 'active', $7, now(), now())
+ON CONFLICT (id) DO UPDATE SET floor_price = EXCLUDED.floor_price, format = 'video', video_config = EXCLUDED.video_config, updated_at = now()`
+		pageURL := "https://" + pub.Domain + "/v/" + externalKey
+		if _, err := tx.Exec(q, id, pub.ID, pub.AccountID, externalKey, floor, pageURL, videoJSON); err != nil {
+			t.Fatalf("video placements insert: %v", err)
+		}
+	})
+	return Placement{ID: id, ExternalID: externalKey, PublisherID: pub.ID, FloorPrice: floor, Width: 640, Height: 360}
+}

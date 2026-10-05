@@ -22,6 +22,7 @@ var PublisherAdServer = struct {
 	OmidVerificationURL                config.StringKey
 	OmidVendor                         config.StringKey
 	StubOnNobid                        config.BoolKey
+	ConsumeAdM                         config.BoolKey
 
 	// URL/Port are env/manifest territory by design — Raw, not in the schema.
 	URL  config.StringKey
@@ -41,6 +42,7 @@ var PublisherAdServer = struct {
 	OmidVerificationURL:                publisherAdServerSet.String("publisher_adserver.omid_verification_url", "", config.TierLive, "Open Measurement (OMID) verification script URL to embed as <AdVerifications> in served VAST. Empty (default) = no AdVerifications element. Point at a measurement vendor's OM SDK verification JS to enable viewability/verification measurement on video ads.", config.Since("v1.4")),
 	OmidVendor:                         publisherAdServerSet.String("publisher_adserver.omid_vendor", "ad-tech-mono-omid", config.TierLive, "Vendor key attribute for the OMID <Verification> element. Only used when publisher_adserver.omid_verification_url is set.", config.Since("v1.4")),
 	StubOnNobid:                        publisherAdServerSet.Bool("publisher_adserver.stub_on_nobid", "false", config.TierLive, "When true, serve a canned demo (house) ad on a video/native/audio no-bid instead of an honest empty no-fill. OFF by default: the platform serves only real auctioned demand — a no-bid returns an empty VAST / 204 (no ad, not fake data). Enable only for a fully-empty dev environment that needs something renderable.", config.Since("v1.6")),
+	ConsumeAdM:                         publisherAdServerSet.Bool("publisher_adserver.consume_adm", "true", config.TierLive, "Parse the auction winner's bid.adm VAST (OpenRTB §4.3) and serve it with the platform's signed trackers injected, instead of hand-building VAST from the MediaURL extension. Off = legacy MediaURL-only build (adm ignored). Live ops lever if a buggy buyer VAST slips through.", config.Since("v1.8")),
 	URL:                                config.RawString("publisher_adserver.url", routes.DefaultPublisherAdServerURL),
 	Port:                               config.RawString("publisher_adserver.port", routes.PortPublisherAdServer),
 	NATSURL:                            config.RawString("publisher_adserver.nats_url", routes.DefaultNATSURL),

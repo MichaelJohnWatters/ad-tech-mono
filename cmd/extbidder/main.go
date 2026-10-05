@@ -194,10 +194,12 @@ func (b *bidder) handleBid(w http.ResponseWriter, r *http.Request) {
 		bid.W, bid.H, bid.Dur = w, h, 15
 		bid.AdM = b.vast(req.ID, w, h)
 		bid.MediaURL = b.videoURL
+		bid.Protocol = openrtb.ProtocolVAST42
 	case imp.Audio != nil:
 		bid.Dur = 15
-		bid.AdM = b.daast(req.ID)
+		bid.AdM = b.vastAudio(req.ID)
 		bid.MediaURL = b.audioURL
+		bid.Protocol = openrtb.ProtocolVAST42
 	case imp.Native != nil:
 		bid.AdM = b.native()
 	default: // banner (or unknown → serve a banner)
@@ -240,23 +242,33 @@ func (b *bidder) banner(w, h int, price float64) string {
 		w, h, b.adomain, b.brand, price)
 }
 
+// vast builds the standard VAST 4.2 bid.adm. The Impression URI carries the
+// OpenRTB §4.4 ${AUCTION_PRICE}/${AUCTION_ID} macros — the buyer's own
+// delivery tracking, substituted by the EXCHANGE at win time with the
+// clearing price (this is how a real DSP learns what it paid).
 func (b *bidder) vast(auctionID string, w, h int) string {
-	return `<VAST version="4.0"><Ad id="ext-` + auctionID + `"><InLine>` +
+	return `<VAST version="4.2"><Ad id="ext-` + auctionID + `"><InLine>` +
 		`<AdSystem>extbidder</AdSystem><AdTitle>` + b.brand + ` (external DSP)</AdTitle>` +
-		`<Impression><![CDATA[https://` + b.adomain + `/imp]]></Impression>` +
-		`<Creatives><Creative><Linear><Duration>00:00:15</Duration>` +
+		`<Impression><![CDATA[https://` + b.adomain + `/imp?p=${AUCTION_PRICE}&a=${AUCTION_ID}]]></Impression>` +
+		`<Creatives><Creative><UniversalAdId idRegistry="extbidder">ext-creative</UniversalAdId>` +
+		`<Linear><Duration>00:00:15</Duration>` +
 		`<MediaFiles><MediaFile delivery="progressive" type="video/mp4" width="` +
 		strconv.Itoa(w) + `" height="` + strconv.Itoa(h) + `"><![CDATA[` + b.videoURL +
 		`]]></MediaFile></MediaFiles></Linear></Creative></Creatives></InLine></Ad></VAST>`
 }
 
-func (b *bidder) daast(auctionID string) string {
-	return `<DAAST version="1.0"><Ad id="ext-` + auctionID + `"><InLine>` +
+// vastAudio replaced the DAAST document 2026-10-05: DAAST was folded into
+// VAST 4.1 by the IAB — modern audio is a VAST 4.x audio MediaFile. The SSP
+// still ADVERTISES protocols 9/10 for hypothetical DAAST-only third parties,
+// but nothing in this repo emits DAAST anymore.
+func (b *bidder) vastAudio(auctionID string) string {
+	return `<VAST version="4.2"><Ad id="ext-` + auctionID + `"><InLine>` +
 		`<AdSystem>extbidder</AdSystem><AdTitle>` + b.brand + ` (external DSP)</AdTitle>` +
-		`<Impression><![CDATA[https://` + b.adomain + `/imp]]></Impression>` +
-		`<Creatives><Creative><Linear><Duration>00:00:15</Duration>` +
+		`<Impression><![CDATA[https://` + b.adomain + `/imp?p=${AUCTION_PRICE}&a=${AUCTION_ID}]]></Impression>` +
+		`<Creatives><Creative><UniversalAdId idRegistry="extbidder">ext-creative</UniversalAdId>` +
+		`<Linear><Duration>00:00:15</Duration>` +
 		`<MediaFiles><MediaFile delivery="progressive" type="audio/mpeg"><![CDATA[` +
-		b.audioURL + `]]></MediaFile></MediaFiles></Linear></Creative></Creatives></InLine></Ad></DAAST>`
+		b.audioURL + `]]></MediaFile></MediaFiles></Linear></Creative></Creatives></InLine></Ad></VAST>`
 }
 
 func (b *bidder) native() string {

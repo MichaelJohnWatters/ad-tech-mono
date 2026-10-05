@@ -52,7 +52,8 @@ type Bid struct {
 	Width        int    // creative pixel width
 	Height       int    // creative pixel height
 	MediaURL     string // video / audio media file URL — passed through to the winning OpenRTB BidObj.MediaURL
-	AdM          string // ad markup — native response JSON (OpenRTB Native), passed through to the winning BidObj.AdM
+	AdM          string // ad markup — native response JSON or VAST XML (video/audio), passed through to the winning BidObj.AdM
+	Protocol     int    // AdCOM creative subtype the AdM declares (13 = VAST 4.2) — passed through to BidObj.Protocol
 	AdvertiserID string
 	// SettlementSeat is the TRUSTED billable seat for data-fee attribution, set
 	// by the exchange from WHICH configured endpoint returned this bid (never the
