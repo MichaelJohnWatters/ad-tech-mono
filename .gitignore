@@ -109,3 +109,6 @@ third_party/
 /demoadv
 /taxonomy-import
 perf-archives/
+
+# Micro-benchmark transient run output (baseline.txt is committed)
+docs/perf/bench/.last.txt
