@@ -103,10 +103,13 @@ id, so the campaign's targeting is already wired — no targeting step needed.
 #    would make Lumière win BEFORE the upload and kill the causality.
 kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -c \
   "UPDATE targeting_rules SET include_segments='{d9d0cc1d-9a28-5072-9f1f-83de4c63d4e7}' WHERE line_item_id='1d731db6-7c55-5092-8171-b598836f45cf';"
-# 2. Virgin list: wipe members + the stats/history any rehearsal left behind.
+# 2. Virgin list: wipe members + stats/history, and RESTORE dsp_private —
+#    the hourly identity-expansion writer upserts the segment and resets
+#    visibility to public (latent quirk, filed in PLAN.md), which would
+#    break the "never rides the bid request" narrative.
 kubectl -n adtech exec postgres-0 -- psql -U adtech -d adtech -c \
   "DELETE FROM audience_segment_members WHERE segment_id='d9d0cc1d-9a28-5072-9f1f-83de4c63d4e7';
-   UPDATE audience_segments SET match_rate=NULL,last_upload_at=NULL,size_estimate=0 WHERE id='d9d0cc1d-9a28-5072-9f1f-83de4c63d4e7';
+   UPDATE audience_segments SET visibility='dsp_private',match_rate=NULL,last_upload_at=NULL,size_estimate=0 WHERE id='d9d0cc1d-9a28-5072-9f1f-83de4c63d4e7';
    DELETE FROM audience_ingest_jobs WHERE segment_id='d9d0cc1d-9a28-5072-9f1f-83de4c63d4e7';"
 # 3. Buy-side knobs: identity resolution ON (page visitor → graph → hashed
 #    member) + fast audience-cache refresh so upload→win is ~10s not 5min.
