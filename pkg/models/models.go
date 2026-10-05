@@ -432,6 +432,13 @@ type ServeRequest struct {
 	// never burns a cap slot. "record" = increment only (the ad was actually
 	// stitched), no allow/block decision. See CapMode* constants.
 	CapMode string `json:"cap_mode,omitempty"`
+	// AdMFallback signals the CALLER holds the auction winner's bid.adm HTML
+	// (an external display bidder — OpenRTB §4.3). On an unknown CreativeID
+	// the ad server then returns its signed beacon URLs with NO HTML
+	// (ServeResponse.ExternalAdM) instead of the placeholder, and the caller
+	// wraps the buyer's adm with them. The frequency cap is decided+recorded
+	// BEFORE creative resolution, so this path can never bypass it.
+	AdMFallback bool `json:"adm_fallback,omitempty"`
 }
 
 // Frequency-cap application modes for ServeRequest.CapMode (non-display cap-only
@@ -462,6 +469,10 @@ type ServeResponse struct {
 	// signed Privacy Sandbox attribution-source beacon the SDK registers via
 	// attributionsrc. Empty otherwise. Reporting-only overlay — see pkg/ara.
 	ARASourceURL string `json:"ara_source_url,omitempty"`
+	// ExternalAdM is set when the request carried AdMFallback and the creative
+	// was unknown: HTML is empty, the beacon URLs are signed and ready, and
+	// the caller renders the buyer's own adm wrapped with them.
+	ExternalAdM bool `json:"external_adm,omitempty"`
 }
 
 // DSPProfile is a YAML-based DSP configuration with campaign definitions.

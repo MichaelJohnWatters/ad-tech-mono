@@ -529,6 +529,40 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, dpRenderer *dyna
 
 		creative, ok := resolver.Get(ctx, req.CreativeID)
 		if !ok {
+			// External display adm (OpenRTB §4.3): the caller holds the auction
+			// winner's own HTML and only needs OUR signed beacons — an unknown
+			// creative here is EXPECTED (external bidders have no row in our
+			// store), not a render failure. The frequency cap was already
+			// decided+recorded above, so this path cannot bypass it. Return
+			// the signed beacon set with no HTML; the SSP wraps the buyer adm.
+			if req.AdMFallback {
+				reqLog.Info("external adm serve: signing beacons, no render",
+					"requested_creative_id", req.CreativeID,
+					"campaign_id", req.CampaignID,
+					"placement_id", req.PlacementID)
+				macroCtx := serveMacroCtx(req, "", trackerURL, urlTTLFn())
+				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+				json.NewEncoder(w).Encode(models.ServeResponse{
+					ExternalAdM:    true,
+					ImpressionURL:  adserving.BuildImpressionURL(macroCtx),
+					ClickURL:       adserving.BuildClickURL(macroCtx),
+					ViewabilityURL: adserving.BuildViewabilityURL(macroCtx),
+					TraceID:        req.TraceID,
+					CreativeID:     req.CreativeID,
+					CampaignID:     req.CampaignID,
+					PlacementID:    req.PlacementID,
+					PublisherID:    req.PublisherID,
+					AdvertiserID:   req.AdvertiserID,
+					ClearingPrice:  req.ClearingPrice,
+					Currency:       req.Currency,
+					Width:          req.Width,
+					Height:         req.Height,
+					// No ARA source: an external creative carries no landing URL
+					// for a destination (known limitation, like the Prebid path).
+				})
+				obsAdServePhase("assemble", phaseMark)
+				return
+			}
 			reqLog.Warn("unknown creative, falling back to default HTML",
 				"requested_creative_id", req.CreativeID,
 				"campaign_id", req.CampaignID,
@@ -562,29 +596,7 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, dpRenderer *dyna
 			creative.HTML = dpRenderer.Assemble(ctx, creative, req.AdvertiserID, req.BehaviourUserID, req.HouseholdID)
 		}
 
-		macroCtx := adserving.MacroContext{
-			AuctionID:    req.TraceID,
-			AuctionPrice: req.ClearingPrice,
-			Currency:     req.Currency,
-			CampaignID:   req.CampaignID,
-			CreativeID:   req.CreativeID,
-			PlacementID:  req.PlacementID,
-			PublisherID:  req.PublisherID,
-			AdvertiserID: req.AdvertiserID,
-			IOId:         req.IOId,
-			DealID:       req.DealID,
-			BidModel:     req.BidModel,
-			SiteDomain:   req.SiteDomain,
-			Width:        req.Width,
-			Height:       req.Height,
-			Geo:          req.Geo,
-			Device:       req.Device,
-			UserID:       req.BehaviourUserID, // consent-gated upstream (empty = no personalisation consent)
-			Household:    req.HouseholdID,     // baked onto the beacon only alongside a consented uid (setGeoDevice)
-			TrackerURL:   trackerURL,
-			LandingURL:   creative.LandingURL,
-			URLTTL:       urlTTLFn(),
-		}
+		macroCtx := serveMacroCtx(req, creative.LandingURL, trackerURL, urlTTLFn())
 
 		renderedHTML := adserving.SubstituteMacros(creative.HTML, macroCtx)
 		impressionURL := adserving.BuildImpressionURL(macroCtx)
@@ -626,6 +638,36 @@ func serveHandler(log *slog.Logger, resolver *CreativeResolver, dpRenderer *dyna
 			"placement", req.PlacementID,
 			"clearing_price", req.ClearingPrice,
 		)
+	}
+}
+
+// serveMacroCtx builds the serve-time MacroContext purely from request
+// fields + the creative's landing URL (empty on the external-adm path —
+// the buyer owns its click chain, same as Prebid). Shared by the render
+// path and the AdMFallback beacon-only path so beacon signing is identical.
+func serveMacroCtx(req models.ServeRequest, landingURL, trackerURL string, ttl time.Duration) adserving.MacroContext {
+	return adserving.MacroContext{
+		AuctionID:    req.TraceID,
+		AuctionPrice: req.ClearingPrice,
+		Currency:     req.Currency,
+		CampaignID:   req.CampaignID,
+		CreativeID:   req.CreativeID,
+		PlacementID:  req.PlacementID,
+		PublisherID:  req.PublisherID,
+		AdvertiserID: req.AdvertiserID,
+		IOId:         req.IOId,
+		DealID:       req.DealID,
+		BidModel:     req.BidModel,
+		SiteDomain:   req.SiteDomain,
+		Width:        req.Width,
+		Height:       req.Height,
+		Geo:          req.Geo,
+		Device:       req.Device,
+		UserID:       req.BehaviourUserID, // consent-gated upstream (empty = no personalisation consent)
+		Household:    req.HouseholdID,     // baked onto the beacon only alongside a consented uid (setGeoDevice)
+		TrackerURL:   trackerURL,
+		LandingURL:   landingURL,
+		URLTTL:       ttl,
 	}
 }
 
