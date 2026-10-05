@@ -58,7 +58,23 @@
   var badge   = document.getElementById('vt-badge');
   var statusEl= document.getElementById('vt-status');
   function status(t){ statusEl.textContent = t; }
-  function fire(u){ if(u){ var i=new Image(); i.src=u; } }
+  // Spec-player macro substitution (VAST 4.2 §6): the platform emits
+  // [CACHEBUSTING]/[TIMESTAMP]/[ADPLAYHEAD]/[ERRORCODE] as literal tokens
+  // OUTSIDE the HMAC; the player replaces them at fire time (same contract
+  // as adtech.js 2.1.0). errorCode/playhead default to 0 when unknown.
+  function hms(sec){ if(!isFinite(sec)||sec<0) sec=0;
+    var h=Math.floor(sec/3600), m=Math.floor(sec/60)%60, s=Math.floor(sec)%60, ms=Math.round((sec%1)*1000);
+    function p2(n){ return (n<10?'0':'')+n; }
+    return p2(h)+':'+p2(m)+':'+p2(s)+'.'+('00'+ms).slice(-3); }
+  function expandMacros(u, playheadSec, errorCode){
+    if(!u || u.indexOf('[')===-1) return u;
+    var pos = encodeURIComponent(hms(playheadSec||0));
+    return u.split('[CACHEBUSTING]').join(String(Math.floor(Math.random()*1e8)))
+            .split('[TIMESTAMP]').join(encodeURIComponent(new Date().toISOString()))
+            .split('[ADPLAYHEAD]').join(pos)
+            .split('[CONTENTPLAYHEAD]').join(pos)
+            .split('[ERRORCODE]').join(String(errorCode||0)); }
+  function fire(u, playheadSec, errorCode){ if(u){ var i=new Image(); i.src=expandMacros(u, playheadSec, errorCode); } }
 
   // Parse VMAP (namespace-agnostic: match by localName) into ordered breaks.
   function parseVmap(xml){
@@ -92,20 +108,25 @@
       var media = doc.querySelector('MediaFile');
       if (!media){ cb(); return; }
       var imp = (doc.querySelector('Impression')||{}).textContent;
+      var errs = []; doc.querySelectorAll('Error').forEach(function(e){ var u=(e.textContent||'').trim(); if(u) errs.push(u); });
       var track = {}; doc.querySelectorAll('Tracking').forEach(function(t){ track[t.getAttribute('event')] = t.textContent.trim(); });
       var clickThrough = ((doc.querySelector('ClickThrough')||{}).textContent||'').trim();
       var clickTrack   = ((doc.querySelector('ClickTracking')||{}).textContent||'').trim();
       content.style.display = 'none'; adv.style.display = 'block';
       badge.style.display = 'block';
-      badge.onclick = function(){ if (clickTrack) fire(clickTrack); if (clickThrough) window.open(clickThrough,'_blank'); status('ad clicked ✓ — click recorded'); };
+      badge.onclick = function(){ if (clickTrack) fire(clickTrack, adv.currentTime); if (clickThrough) window.open(clickThrough,'_blank'); status('ad clicked ✓ — click recorded'); };
       adv.src = media.textContent.trim(); adv.play();
       var f = {};
-      adv.onplay = function(){ if(!f.i){ f.i=1; fire(imp); fire(track.start); } };
+      // VAST <Error>: fired with [ERRORCODE] substituted on a fatal media failure.
+      adv.onerror = function(){ if(f.e) return; f.e=1;
+        var code = (adv.error && adv.error.code===MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) ? 401 : 405;
+        errs.forEach(function(u){ fire(u, adv.currentTime, code); }); cb(); };
+      adv.onplay = function(){ if(!f.i){ f.i=1; fire(imp, 0); fire(track.start, 0); } };
       adv.ontimeupdate = function(){ if(!adv.duration) return; var p=adv.currentTime/adv.duration;
         document.getElementById('vt-count').textContent = Math.ceil(adv.duration-adv.currentTime)+'s';
-        if(p>=.25&&!f.q1){f.q1=1;fire(track.firstQuartile);} if(p>=.5&&!f.q2){f.q2=1;fire(track.midpoint);} if(p>=.75&&!f.q3){f.q3=1;fire(track.thirdQuartile);} };
-      adv.onended = function(){ if(f.d) return; f.d=1; fire(track.complete);
-        adv.onplay=adv.ontimeupdate=adv.onended=null; adv.style.display='none'; badge.style.display='none'; content.style.display='block'; cb(); };
+        if(p>=.25&&!f.q1){f.q1=1;fire(track.firstQuartile, adv.currentTime);} if(p>=.5&&!f.q2){f.q2=1;fire(track.midpoint, adv.currentTime);} if(p>=.75&&!f.q3){f.q3=1;fire(track.thirdQuartile, adv.currentTime);} };
+      adv.onended = function(){ if(f.d) return; f.d=1; fire(track.complete, adv.duration);
+        adv.onplay=adv.ontimeupdate=adv.onended=adv.onerror=null; adv.style.display='none'; badge.style.display='none'; content.style.display='block'; cb(); };
     }).catch(function(){ cb(); });
   }
   // Play a list of breaks in sequence, then done().
