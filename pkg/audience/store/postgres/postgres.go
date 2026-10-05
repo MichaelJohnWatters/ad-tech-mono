@@ -110,6 +110,88 @@ func New(db *sql.DB) *Store {
 	return &Store{db: db}
 }
 
+// MemberRow is one sampled audience member for the portal's member view —
+// the hash, which writer enrolled it (api / dropzone / identity-expansion /
+// retargeting…), when, and whether the identity graph can resolve it
+// (graph_known = the per-row truth behind the aggregate match_rate, i.e. the
+// match report).
+type MemberRow struct {
+	UserID     string    `json:"user_id"`
+	Source     string    `json:"source"`
+	AddedAt    time.Time `json:"added_at"`
+	GraphKnown bool      `json:"graph_known"`
+}
+
+// SegmentMembers returns up to limit members of the segment, newest first.
+// Tenant-scoped: RLS via withTenant plus an explicit owner join — a segment
+// id from another account returns zero rows, indistinguishable from empty.
+func (s *Store) SegmentMembers(ctx context.Context, accountID, segmentID string, limit int) ([]MemberRow, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 25
+	}
+	out := []MemberRow{}
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		// identity_graph is platform-global (no RLS), so the EXISTS works
+		// inside the tenant tx.
+		const q = `
+SELECT m.user_id, COALESCE(m.source, ''), m.added_at,
+       EXISTS(SELECT 1 FROM identity_graph g WHERE g.user_id = m.user_id OR g.linked_id = m.user_id)
+FROM audience_segment_members m
+JOIN audience_segments s2 ON s2.id = m.segment_id
+WHERE m.segment_id = $1::uuid AND s2.account_id = $2::uuid
+ORDER BY m.added_at DESC
+LIMIT $3`
+		rows, err := tx.QueryContext(ctx, q, segmentID, accountID, limit)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var m MemberRow
+			if err := rows.Scan(&m.UserID, &m.Source, &m.AddedAt, &m.GraphKnown); err != nil {
+				return err
+			}
+			out = append(out, m)
+		}
+		return rows.Err()
+	})
+	return out, err
+}
+
+// CheckUser answers the portal's "test a hash" box for the OWNING account:
+// which of the account's segments contain this user id, and whether the
+// identity graph has ever observed it (= would a CRM row with this hash
+// match). Only the caller's own segments are consulted.
+func (s *Store) CheckUser(ctx context.Context, accountID, userID string) (segments []string, graphKnown bool, err error) {
+	segments = []string{}
+	err = s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		const q = `
+SELECT s.name FROM audience_segment_members m
+JOIN audience_segments s ON s.id = m.segment_id
+WHERE m.user_id = $2 AND s.account_id = $1::uuid
+ORDER BY s.name`
+		rows, err := tx.QueryContext(ctx, q, accountID, userID)
+		if err != nil {
+			return err
+		}
+		defer rows.Close()
+		for rows.Next() {
+			var n string
+			if err := rows.Scan(&n); err != nil {
+				return err
+			}
+			segments = append(segments, n)
+		}
+		if err := rows.Err(); err != nil {
+			return err
+		}
+		return tx.QueryRowContext(ctx,
+			`SELECT EXISTS(SELECT 1 FROM identity_graph g WHERE g.user_id = $1 OR g.linked_id = $1)`,
+			userID).Scan(&graphKnown)
+	})
+	return segments, graphKnown, err
+}
+
 // SegmentsForUser returns every PUBLIC segment ID the user belongs to.
 // Used by the SSP to stamp user.ext.segments on outbound bid requests.
 // dsp_private segments are excluded — those belong to a specific DSP and

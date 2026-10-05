@@ -188,6 +188,14 @@ const (
 	// counts, match rate, and error. Registered as a subtree so {id} is a path
 	// segment.
 	APIAudienceIngest = apiPrefix + "/api/audiences/ingest/"
+	// APIAudienceMembers samples a segment's members (portal member view /
+	// per-row match report): GET /v1/api/audiences/members/{segment_id}?limit=N
+	// → [{user_id, source, added_at, graph_known}]. Tenant-scoped.
+	APIAudienceMembers = apiPrefix + "/api/audiences/members/"
+	// APIAudienceCheck answers the portal's "test a hash" box:
+	// GET /v1/api/audiences/check?user_id=H → {segments: [names], graph_known}
+	// — consults ONLY the caller's own segments.
+	APIAudienceCheck = apiPrefix + "/api/audiences/check"
 	// APIAudiencePGPKey serves the platform's PGP PUBLIC key (ADR 0008) so
 	// providers can encrypt audience files to it before upload: GET returns
 	// {public_key, fingerprint}. The key is public, but the endpoint sits behind

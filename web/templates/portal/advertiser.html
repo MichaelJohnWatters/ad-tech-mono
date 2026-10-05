@@ -147,6 +147,16 @@
       {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Targeted by" "Taxonomy" "Fee" "Members" "Match rate" "Updated" "")) }}
         <tr><td colspan="10" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
+      <!-- Test a hash: is this customer in any of my lists / known to the
+           identity graph? Emails are hashed in the browser before the check
+           — the same hash-before-transmission rule as uploads. -->
+      <div class="mt-3 flex items-center gap-2 text-sm">
+        <span class="text-xs font-medium text-gray-600 dark:text-gray-300">Test a hash</span>
+        <input id="hashcheck_in" placeholder="email or sha256 hash" class="flex-1 max-w-md rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs font-mono"
+               onkeydown="if(event.key==='Enter'){event.preventDefault();checkHash();}" />
+        {{ template "button" (dict "label" "Check" "variant" "secondary" "size" "sm" "onclick" "checkHash()") }}
+        <span id="hashcheck_out" class="text-xs text-gray-500"></span>
+      </div>
       {{ template "card-end" . }}
 
       <!-- Real-time retargeting audiences (cmd/audience-rt): a shopper who fires
@@ -947,6 +957,21 @@
       {{ template "button" (dict "label" "Upload" "type" "submit") }}
     </div>
   </form>
+{{ template "modal-end" . }}
+
+<!-- Audience member sample: who's in the list, who enrolled them, and the
+     per-row identity-graph verdict (the row-level truth behind match_rate). -->
+{{ template "modal-start" (dict "id" "audMembers" "title" "Audience members") }}
+  <div id="audMembersSummary" class="text-xs text-gray-500 mb-2"></div>
+  <div class="max-h-96 overflow-auto">
+    <table class="w-full text-xs">
+      <thead><tr class="text-left text-gray-400"><th class="px-2 py-1">Member (hash)</th><th class="px-2 py-1">Enrolled by</th><th class="px-2 py-1">Added</th><th class="px-2 py-1">Identity graph</th></tr></thead>
+      <tbody id="audMembersBody"></tbody>
+    </table>
+  </div>
+  <div class="flex justify-end mt-3">
+    {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('audMembers').classList.add('hidden')") }}
+  </div>
 {{ template "modal-end" . }}
 
 <!-- Upload audience modal -->
@@ -2374,6 +2399,50 @@ function collectSegments(prefix) {
   return out;
 }
 
+// openMembers: sample a segment's members — hash, enrolling writer, and the
+// per-row identity-graph verdict (the row-level view behind match_rate).
+async function openMembers(id, name) {
+  const body = $('audMembersBody'), sum = $('audMembersSummary');
+  body.innerHTML = '<tr><td colspan="4" class="px-2 py-4 text-center text-gray-400">loading…</td></tr>';
+  sum.textContent = name;
+  $('audMembers').classList.remove('hidden');
+  try {
+    const res = await fetchJSON('/v1/api/audiences/members/' + encodeURIComponent(id) + '?limit=50');
+    const rows = res.members || [];
+    const known = rows.filter(m => m.graph_known).length;
+    sum.textContent = `${name} — sample of ${rows.length}; ${known} resolvable via the identity graph (these are the rows behind the match rate)`;
+    body.innerHTML = rows.length ? rows.map(m => `
+      <tr class="border-t border-gray-100 dark:border-gray-800">
+        <td class="px-2 py-1 font-mono text-[10px] max-w-[18rem] truncate" title="${esc(m.user_id)}">${esc(m.user_id)}</td>
+        <td class="px-2 py-1">${esc(m.source || '—')}</td>
+        <td class="px-2 py-1 text-gray-500">${fmtDate(m.added_at)}</td>
+        <td class="px-2 py-1">${m.graph_known
+          ? '<span class="text-xs px-1.5 py-0.5 rounded bg-success/15 text-success">known</span>'
+          : '<span class="text-xs px-1.5 py-0.5 rounded bg-surface-3 text-gray-400" title="Never observed by the platform — inert until this person shows up with consent">not seen</span>'}</td>
+      </tr>`).join('')
+      : '<tr><td colspan="4" class="px-2 py-4 text-center text-gray-400">no members</td></tr>';
+  } catch (err) {
+    body.innerHTML = `<tr><td colspan="4" class="px-2 py-4 text-center text-error">load failed — ${esc(err.message)}</td></tr>`;
+  }
+}
+
+// checkHash: the "is this customer reachable?" probe. Emails are hashed in
+// the browser first (hash-before-transmission, same as uploads); a raw hash
+// passes through untouched.
+async function checkHash() {
+  const inp = $('hashcheck_in'), out = $('hashcheck_out');
+  let v = (inp.value || '').trim();
+  if (!v) { out.textContent = ''; return; }
+  out.textContent = 'checking…';
+  try {
+    if (v.includes('@')) v = await sha256Hex(v.toLowerCase());
+    const res = await fetchJSON('/v1/api/audiences/check?user_id=' + encodeURIComponent(v));
+    const inSegs = (res.segments || []).length
+      ? `in: ${res.segments.join(', ')}` : 'in none of your audiences';
+    out.textContent = `${inSegs} · identity graph: ${res.graph_known ? 'known (matchable)' : 'never seen (inert)'}`;
+  } catch (err) { out.textContent = 'check failed — ' + err.message; }
+}
+
 // audienceTargetChanged: the upload modal's append-vs-create switch. Picking
 // an existing audience locks name/type/visibility to its values (the server
 // upserts by name, so this guarantees members land in THAT audience — the
@@ -2431,7 +2500,9 @@ async function loadAudiences() {
           : (a.visibility === 'public' && a.taxonomy_path
             ? `<button onclick="openFeeEditor('${esc(a.id)}', null)" class="text-xs px-1.5 py-0.5 rounded border border-dashed border-gray-300 dark:border-gray-600 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">+ fee</button>`
             : `<span class="text-xs text-gray-300 dark:text-gray-600" title="Only public segments with an IAB label can carry a data fee">—</span>`)}</td>
-        <td class="px-3 py-2 font-mono">${fmtInt(a.members)}</td>
+        <td class="px-3 py-2 font-mono">${a.members > 0
+          ? `<button onclick="openMembers('${esc(a.id)}', '${esc(a.name)}')" class="underline decoration-dotted hover:text-brand" title="View a member sample (who enrolled them, graph match per row)">${fmtInt(a.members)}</button>`
+          : fmtInt(a.members)}</td>
         <td class="px-3 py-2 font-mono text-xs">${fmtMatchRate(a.match_rate)}</td>
         <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(a.updated_at)}</td>
         <td class="px-3 py-2 text-right"><button onclick="exportSegment('${esc(a.id)}', '${esc(a.name)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Export</button></td>
