@@ -750,22 +750,12 @@ func (d *serveDeps) writePrebidWinner(ctx context.Context, r *http.Request, w ht
 	// path: the clearing price is the winning bid.
 	buyerHTML := openrtb.ExpandAuctionMacros(best.HTML, best.Price, traceID, defaultStr2(best.Currency, "USD"))
 
-	// Wrap the bid adm with our beacons. Outer div so script-shaped
-	// or iframe-shaped admm still render normally; our beacons sit
-	// outside the bid's own DOM scope so they aren't disturbed by
-	// whatever the bidder does inside.
-	//
-	// Two beacons ride along: the impression <img> (fires on render) AND a
-	// self-contained viewability observer (fires our signed /v1/t/view once the
-	// IAB display threshold — ≥50% on-screen for ≥1s — is met). The external adm
-	// never loads web/static/adtech.js, so without this injected observer the
-	// impression is recorded but the view never is — the exact "zero data
-	// slippage" hole this path had.
-	wrappedHTML := `<div data-prebid-wrapper="1" style="display:block;width:100%;height:100%;">` +
-		buyerHTML +
-		`<img src="` + impressionURL + `" width="1" height="1" style="display:none;" alt="" />` +
-		prebidViewabilityBeacon(viewabilityURL) +
-		`</div>`
+	// Wrap the bid adm with our beacons (shared helper — same wrapper the
+	// SSP uses for exchange-path external display adm). The impression <img>
+	// fires on render; the injected viewability observer fires our signed
+	// /v1/t/view at the IAB display threshold — the external adm never loads
+	// web/static/adtech.js, so without it the view would never record.
+	wrappedHTML := adserving.WrapExternalDisplayHTML(buyerHTML, impressionURL, viewabilityURL, "data-prebid-wrapper")
 
 	out := struct {
 		TraceID        string  `json:"trace_id"`
@@ -798,30 +788,6 @@ func (d *serveDeps) writePrebidWinner(ctx context.Context, r *http.Request, w ht
 	}
 	w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 	json.NewEncoder(w).Encode(out)
-}
-
-// prebidViewabilityBeacon returns an inline <script> that observes its own
-// wrapper element and fires the signed viewability URL once the IAB display
-// threshold is met (≥50% of pixels on-screen for ≥1 continuous second),
-// appending the client-measured dur/pct/area (the tracker excludes those from
-// signature validation — see cmd/tracker viewSigParams). A faithful, no-SDK
-// port of web/static/adtech.js observeViewability, so an external Prebid render
-// self-reports viewability without loading our SDK. Uses an Image() GET (no
-// CORS preflight, fires cross-origin) and document.currentScript to scope to
-// its own ad when several render on one page.
-func prebidViewabilityBeacon(viewabilityURL string) string {
-	u, _ := json.Marshal(viewabilityURL) // safe JS string literal
-	return `<script>(function(){` +
-		`if(!('IntersectionObserver' in window))return;` +
-		`var s=document.currentScript,w=s&&s.parentElement;if(!w)return;` +
-		`var u=` + string(u) + `,t=null,done=false;` +
-		`var o=new IntersectionObserver(function(es){var e=es[0];` +
-		`if(e.isIntersecting&&e.intersectionRatio>=0.5){if(!t)t=Date.now();}else{t=null;}` +
-		`if(!done&&t&&(Date.now()-t)>=1000){done=true;` +
-		`var d=Date.now()-t,p=Math.round(e.intersectionRatio*100),a=w.offsetWidth*w.offsetHeight;` +
-		`var sep=u.indexOf('?')===-1?'?':'&';` +
-		`(new Image()).src=u+sep+'dur='+d+'&pct='+p+'&area='+a;o.disconnect();}` +
-		`},{threshold:[0,0.5,1.0]});o.observe(w);})();</script>`
 }
 
 // buildPrebidBidRequest constructs the OpenRTB request we POST to every

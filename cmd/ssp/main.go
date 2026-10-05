@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	audstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store"
 	audcached "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/cached"
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
@@ -244,7 +245,10 @@ func main() {
 	endUserIPFn := newEndUserIPFn(cfg)
 	mux.HandleFunc(routes.SSPRequest, requestAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn, endUserIPFn))
 	adServerURL := keys.SSP.AdserverURL.Get(cfg)
-	mux.HandleFunc(routes.SSPServe, shedOnEventPressure(log, serveAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn, endUserIPFn)))
+	// Live kill switch for serving an external display winner's bid.adm
+	// (wrapped with platform beacons); off = legacy placeholder behavior.
+	consumeDisplayAdMFn := func() bool { return keys.SSP.ConsumeDisplayAdM.Get(cfg) }
+	mux.HandleFunc(routes.SSPServe, shedOnEventPressure(log, serveAdHandler(log, placementCache, audienceStore, taxCache, exchangeURL, adServerURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn, endUserIPFn, consumeDisplayAdMFn)))
 
 	// Per-IP rate limit on the public SSP endpoints (ratelimit_rps=0 → disabled).
 	sspRL := middleware.NewLiveRateLimiter(func() middleware.RateLimitConfig {
@@ -1126,7 +1130,7 @@ func doAdServe(ctx context.Context, adServerURL string, body []byte) (int, []byt
 // Anything the user wants to see about the auction internals (winner, fan-out,
 // per-DSP latencies, NATS event consumers) shows up via Jaeger polling on
 // the same trace_id, NOT via this response.
-func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string, endUserIPFn func(*http.Request) string) http.HandlerFunc {
+func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementRow], audienceStore audstore.Lookup, taxCache *taxonomyCache, exchangeURL, adServerURL, sellerDomain string, idPublisher *identityPublisher, bhPublisher *behaviourPublisher, dfPublisher *dataFeePublisher, debugEnabledFn func() bool, householdFn func(ip string) string, endUserIPFn func(*http.Request) string, consumeDisplayAdMFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ac, ok := runSSPAuction(w, r, log, placements, audienceStore, taxCache, exchangeURL, sellerDomain, idPublisher, bhPublisher, dfPublisher, debugEnabledFn, householdFn, endUserIPFn)
 		if !ok {
@@ -1293,10 +1297,20 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 		const maxReauctions = 4
 		for attempt := 0; ; attempt++ {
 			winner := resp.SeatBid[0].Bid[0]
+			// External display adm (OpenRTB §4.3): when the winner carries
+			// HTML markup and the kill switch is on, tell the ad server we
+			// can serve it ourselves if the creative is unknown (AdMFallback)
+			// — the adserver still decides+records the frequency cap first.
+			// Recomputed per re-auction round (a runner-up may be internal).
+			winnerAdM := ""
+			if consumeDisplayAdMFn() {
+				winnerAdM = displayAdMForServe(winner)
+			}
 			serveReq := models.ServeRequest{
-				TraceID:    ac.TraceID,
-				CampaignID: winner.CID,
-				CreativeID: winner.CrID,
+				TraceID:     ac.TraceID,
+				CampaignID:  winner.CID,
+				CreativeID:  winner.CrID,
+				AdMFallback: winnerAdM != "",
 				// DealID rides serve → adserver → tracker beacon (deal=) →
 				// billing, where the deal's TYPE drives contract fee modifiers.
 				// Was dropped here, so deal-won impressions billed as open market.
@@ -1336,17 +1350,41 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 					return
 				}
 
-				// Macro substitution. Creative HTML can carry standard ad-tech
-				// tokens (${IMP_PIXEL}, ${CLICK_URL}, ${VIEWABILITY_URL}) so the
-				// same row in the creatives table serves any auction outcome. SSP
-				// substitutes them with the per-auction signed URLs before the
-				// HTML reaches the browser — clients should never see raw macros.
-				expandedHTML := strings.NewReplacer(
-					"${IMP_PIXEL}", sr.ImpressionURL,
-					"${CLICK_URL}", sr.ClickURL,
-					"${VIEWABILITY_URL}", sr.ViewabilityURL,
-					"${TRACE_ID}", ac.TraceID,
-				).Replace(sr.HTML)
+				var expandedHTML string
+				switch {
+				case sr.ExternalAdM && winnerAdM != "":
+					// External display adm: the creative is unknown to the ad
+					// server, so serve the BUYER's HTML wrapped with our signed
+					// beacons (impression pixel + viewability observer — the
+					// same wrapper the Prebid outbound path uses). The §4.4
+					// auction macros were substituted by the exchange; the
+					// platform ${...} replacer below doesn't apply (external
+					// HTML never carries platform macros).
+					expandedHTML = adserving.WrapExternalDisplayHTML(
+						winnerAdM, sr.ImpressionURL, sr.ViewabilityURL, "data-external-adm-wrapper")
+					reqLog.Info("external display adm served",
+						"seat", resp.SeatBid[0].Seat, "crid", winner.CrID)
+				case sr.ExternalAdM:
+					// Defensive: the ad server only flags ExternalAdM when WE
+					// sent AdMFallback, so this shouldn't happen — treat as a
+					// render decline rather than serving an empty ad.
+					reqLog.Warn("adserver flagged external adm but no adm held — no-fill")
+					w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
+					json.NewEncoder(w).Encode(serveAdResponse{TraceID: ac.TraceID, NoBid: true})
+					return
+				default:
+					// Macro substitution. Creative HTML can carry standard ad-tech
+					// tokens (${IMP_PIXEL}, ${CLICK_URL}, ${VIEWABILITY_URL}) so the
+					// same row in the creatives table serves any auction outcome. SSP
+					// substitutes them with the per-auction signed URLs before the
+					// HTML reaches the browser — clients should never see raw macros.
+					expandedHTML = strings.NewReplacer(
+						"${IMP_PIXEL}", sr.ImpressionURL,
+						"${CLICK_URL}", sr.ClickURL,
+						"${VIEWABILITY_URL}", sr.ViewabilityURL,
+						"${TRACE_ID}", ac.TraceID,
+					).Replace(sr.HTML)
+				}
 
 				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 				json.NewEncoder(w).Encode(serveAdResponse{
