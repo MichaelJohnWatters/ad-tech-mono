@@ -29,11 +29,12 @@ type FakeDSP struct {
 	URL  string
 	Mode FakeDSPMode
 
-	mu        sync.Mutex
-	winCalls  []FakeNotify
-	lossCalls []FakeNotify
-	bidCalls  int
-	bidReqs   []openrtb.BidRequest
+	mu           sync.Mutex
+	winCalls     []FakeNotify
+	lossCalls    []FakeNotify
+	billingCalls []FakeNotify
+	bidCalls     int
+	bidReqs      []openrtb.BidRequest
 
 	srv *httptest.Server
 }
@@ -160,6 +161,21 @@ func NewFakeDSP(t *testing.T, opts FakeDSPOpts) *FakeDSP {
 		w.WriteHeader(http.StatusNoContent)
 	})
 
+	// burl billing notice (OpenRTB 2.5+): fired by reporting at the billable
+	// moment (impression booked), not at auction time.
+	mux.HandleFunc(routes.OpenRTBBilling, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		f.mu.Lock()
+		f.billingCalls = append(f.billingCalls, FakeNotify{
+			BidID:       q.Get("bid_id"),
+			Price:       q.Get("price"),
+			CampaignID:  q.Get("campaign_id"),
+			PlacementID: q.Get("placement_id"),
+		})
+		f.mu.Unlock()
+		w.WriteHeader(http.StatusNoContent)
+	})
+
 	// Best-effort 404 on anything else so unexpected fan-out surfaces in
 	// test logs rather than silently 200ing.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -210,5 +226,14 @@ func (f *FakeDSP) LossCalls() []FakeNotify {
 	defer f.mu.Unlock()
 	out := make([]FakeNotify, len(f.lossCalls))
 	copy(out, f.lossCalls)
+	return out
+}
+
+// BillingCalls returns a copy of the recorded /billing (burl) callbacks.
+func (f *FakeDSP) BillingCalls() []FakeNotify {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]FakeNotify, len(f.billingCalls))
+	copy(out, f.billingCalls)
 	return out
 }

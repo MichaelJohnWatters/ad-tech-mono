@@ -286,6 +286,11 @@ services:
         value: "internal"
       - name: DSP_PORT
         value: "8082"
+      # Buyer-supplied OpenRTB notice URLs (nurl/lurl/burl): the HTTP base
+      # other cluster services reach this DSP on, baked into its bids. Unset
+      # = no notice URLs; the exchange falls back to the legacy ;notify=.
+      - name: DSP_NOTICE_BASE_URL
+        value: "http://dsp-internal:8082"
       # ads.cert: fetch + refresh the exchange's signing keyset so the DSP can
       # verify signed bid requests. Harmless until dsp.adcert_enforcement != off
       # (live). Prod-shaped default; also what makes the adcert e2e test possible.
@@ -345,6 +350,11 @@ services:
         value: "500ms"
       - name: DSP_PORT
         value: "8089"
+      # Buyer-supplied OpenRTB notice URLs (nurl/lurl/burl): the HTTP base
+      # other cluster services reach this DSP on, baked into its bids. Unset
+      # = no notice URLs; the exchange falls back to the legacy ;notify=.
+      - name: DSP_NOTICE_BASE_URL
+        value: "http://dsp-competitor1:8089"
       - name: DSP_ADCERT_KEY_URL
         value: "http://exchange:8081/v1/adcert/key"
       # ads.cert enforcement: no-bid bid requests the exchange didn't Ed25519-sign
@@ -399,6 +409,11 @@ services:
         value: "competitor2"
       - name: DSP_PORT
         value: "8090"
+      # Buyer-supplied OpenRTB notice URLs (nurl/lurl/burl): the HTTP base
+      # other cluster services reach this DSP on, baked into its bids. Unset
+      # = no notice URLs; the exchange falls back to the legacy ;notify=.
+      - name: DSP_NOTICE_BASE_URL
+        value: "http://dsp-competitor2:8090"
       - name: DSP_ADCERT_KEY_URL
         value: "http://exchange:8081/v1/adcert/key"
       # ads.cert enforcement: no-bid bid requests the exchange didn't Ed25519-sign
@@ -456,6 +471,11 @@ services:
         value: "competitor3"
       - name: DSP_PORT
         value: "8098"
+      # Buyer-supplied OpenRTB notice URLs (nurl/lurl/burl): the HTTP base
+      # other cluster services reach this DSP on, baked into its bids. Unset
+      # = no notice URLs; the exchange falls back to the legacy ;notify=.
+      - name: DSP_NOTICE_BASE_URL
+        value: "http://dsp-competitor3:8098"
       - name: DSP_ADCERT_KEY_URL
         value: "http://exchange:8081/v1/adcert/key"
       - name: DSP_ADCERT_ENFORCEMENT
@@ -506,6 +526,11 @@ services:
         value: "competitor4"
       - name: DSP_PORT
         value: "8100"
+      # Buyer-supplied OpenRTB notice URLs (nurl/lurl/burl): the HTTP base
+      # other cluster services reach this DSP on, baked into its bids. Unset
+      # = no notice URLs; the exchange falls back to the legacy ;notify=.
+      - name: DSP_NOTICE_BASE_URL
+        value: "http://dsp-competitor4:8100"
       - name: DSP_ADCERT_KEY_URL
         value: "http://exchange:8081/v1/adcert/key"
       - name: DSP_ADCERT_ENFORCEMENT

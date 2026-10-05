@@ -44,6 +44,13 @@ var DSP = struct {
 	Port     config.StringKey
 	GRPCPort config.StringKey
 
+	// NoticeBaseURL is the HTTP base other cluster services reach this DSP on,
+	// baked into the buyer-supplied nurl/lurl/burl (OpenRTB §4.4). Empty
+	// (default) = emit no notice URLs; the exchange falls back to the legacy
+	// ;notify= convention. Env/manifest territory (per-deployment service
+	// name) — Raw, not in the schema.
+	NoticeBaseURL config.StringKey
+
 	NATSURL config.StringKey
 }{
 	Profile:                            dspSet.String("dsp.profile", "internal", config.TierStatic, "Which DSP identity this pod assumes (internal, competitor1, competitor2). Decides which dsps table row supplies noise_pct and no_bid_rate defaults.", config.Since("v1.0")),
@@ -74,5 +81,6 @@ var DSP = struct {
 	URL:                                config.RawString("dsp.url", routes.DefaultDSPURL),
 	Port:                               config.RawString("dsp.port", routes.PortDSP),
 	GRPCPort:                           config.RawString("dsp.grpc_port", routes.PortDSPGRPC),
+	NoticeBaseURL:                      config.RawString("dsp.notice_base_url", ""),
 	NATSURL:                            config.RawString("dsp.nats_url", routes.DefaultNATSURL),
 }

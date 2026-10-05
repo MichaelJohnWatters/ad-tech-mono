@@ -297,7 +297,7 @@ func main() {
 	lc.OnShutdown("identity-resolver", func(_ context.Context) error { identityStop(); return nil })
 	identityMaxLinked := keys.DSP.IdentityMaxLinked.Get(cfg)
 	responseDelayFn := func() time.Duration { return keys.DSP.ResponseDelay.Get(cfg) }
-	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, responseDelayFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked, flightPacingFn, shadingEnabledFn, shadingTracker, shades)
+	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, responseDelayFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked, flightPacingFn, shadingEnabledFn, shadingTracker, shades, keys.DSP.NoticeBaseURL.Get(cfg))
 	mux.HandleFunc(routes.OpenRTBBid, bid)
 	// Internal gRPC twin of the bid endpoint. Only our own exchange dials it
 	// (grpc://dsp-internal:8182); the exchange's fan-out to any third-party
@@ -308,6 +308,7 @@ func main() {
 
 	mux.HandleFunc(routes.OpenRTBWin, winHandler(log, budget, balanceGate, campaignCache, shadingTracker, shades, pub))
 	mux.HandleFunc(routes.OpenRTBLoss, lossHandler(log, campaignCache, shadingTracker, pub))
+	mux.HandleFunc(routes.OpenRTBBilling, billingHandler(log))
 
 	mux.HandleFunc(routes.DSPShading, func(w http.ResponseWriter, r *http.Request) {
 		// ?advertiser=<account> → that advertiser's OWN per-placement win/loss
@@ -835,7 +836,7 @@ func (s *shadeStash) take(bidID string) float64 {
 	return v
 }
 
-func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, responseDelayFn func() time.Duration, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int, flightPacingFn func() bool, shadingEnabledFn func() bool, shadingTracker *bidshading.Tracker, shades *shadeStash) http.HandlerFunc {
+func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.Campaign], audienceStore audstore.Lookup, optOut *warm.Cache[privacy.OptOut], budget *BudgetTracker, balanceGate *BalanceGate, isCompetitor bool, noisePctFn, noBidRateFn func() float64, responseDelayFn func() time.Duration, pub *events.Publisher, depletedAlreadyPublished *sync.Map, adCertVerify func(*openrtb.BidRequest) (bool, string), identityResolver identityResolver, identityMaxLinked int, flightPacingFn func() bool, shadingEnabledFn func() bool, shadingTracker *bidshading.Tracker, shades *shadeStash, noticeBaseURL string) http.HandlerFunc {
 	// balanceDepletedPublished dedups the account-level depleted event the
 	// same way depletedAlreadyPublished dedups the campaign-level one.
 	// Entries are cleared when the gate sees funds again, so a re-depletion
@@ -1392,6 +1393,11 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		if reqFormat == "display" {
 			bestBid.AdM = displayAdMForBid(bestCampaign, bestBid.CrID)
 		}
+		// Buyer-supplied notice URLs (OpenRTB §4.4): nurl/lurl/burl with the
+		// standard auction macros, pointing at this DSP's own notice endpoints.
+		// No-op when DSP_NOTICE_BASE_URL is unset (exchange falls back to the
+		// legacy ;notify= convention).
+		attachNoticeURLs(bestBid, noticeBaseURL, bestCampaign.ID, bidReq.Imp[0].TagID)
 
 		resp := openrtb.BidResponse{
 			ID:  bidReq.ID,

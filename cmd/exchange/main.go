@@ -901,7 +901,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		// so the trace context survives the handler returning (without it the
 		// goroutine would lose access to the active span and the notify HTTP
 		// calls would appear as detached traces in Jaeger).
-		go sendWinLossNotifications(context.WithoutCancel(ctx), client, bidRecords, winnerBid.DSPID, clearingPrice, bidReq.Imp[0].BidFloor, placementID, reqLog)
+		go sendWinLossNotifications(context.WithoutCancel(ctx), client, bidRecords, winnerBid.DSPID, clearingPrice, bidReq.Imp[0].BidFloor, placementID, traceID, reqLog)
 
 		// Publish auction events to NATS
 		if pub != nil {
@@ -937,6 +937,15 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 					reqSegments = bidReq.User.Ext.Segments
 				}
 				for _, wn := range wins {
+					// Buyer billing notice (OpenRTB §4.4 burl): substituted here
+					// where the clearing price is known, FIRED later by the
+					// billing engine when the impression books (the billable
+					// moment) — it rides the win event to reporting.
+					billingURL := openrtb.ExpandNoticeMacros(wn.bid.BURL, openrtb.NoticeMacros{
+						Price:     wn.price,
+						AuctionID: wn.trace,
+						Currency:  "USD",
+					})
 					pub.AuctionWin(pubCtx, events.AuctionWinEvent{
 						TraceID:       wn.trace,
 						AuctionID:     traceID,
@@ -951,6 +960,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 						Channel:       routingChannel,
 						DealID:        wn.bid.DealID,
 						Segments:      reqSegments,
+						BillingURL:    billingURL,
 						Timestamp:     clk.Now(),
 					})
 				}
@@ -1105,7 +1115,7 @@ func trustedSeatFor(endpoint string) string {
 // fan-out (which is itself a child of the auction). Without InjectHTTP the
 // DSP would start a fresh trace_id on the inbound and the win/loss spans
 // would appear as detached traces in Jaeger instead of under the auction.
-func sendWinLossNotifications(ctx context.Context, client *http.Client, records []dspBidRecord, winnerDSP string, clearingPrice, floorPrice float64, placementID string, log *slog.Logger) {
+func sendWinLossNotifications(ctx context.Context, client *http.Client, records []dspBidRecord, winnerDSP string, clearingPrice, floorPrice float64, placementID, traceID string, log *slog.Logger) {
 	ctx, span := tracing.StartSpan(ctx, "exchange.winloss_notify",
 		attribute.Int("notify.count", len(records)),
 		attribute.String("notify.winner_dsp", winnerDSP),
@@ -1127,7 +1137,29 @@ func sendWinLossNotifications(ctx context.Context, client *http.Client, records 
 
 	for _, rec := range records {
 		isWin := rec.Bid.DSPID == winnerDSP
-		// Notices are OpenRTB HTTP even when the bid edge rode the internal
+		reason := auction.LossOutbid
+		if rec.Bid.Price < floorPrice {
+			reason = auction.LossBelowFloor
+		}
+
+		// OpenRTB §4.4 standard path: the BUYER supplied its notice URL on
+		// the bid (nurl/lurl) — substitute the auction macros and fire it
+		// verbatim. The legacy fixed-endpoint notice below is the fallback
+		// for bids that carry none (older competitor pods, minimal bidders).
+		if buyerURL := noticeURLFor(rec.Bid, isWin); buyerURL != "" {
+			url := openrtb.ExpandNoticeMacros(buyerURL, openrtb.NoticeMacros{
+				Price:      clearingPrice,
+				MinToWin:   minToWin,
+				AuctionID:  traceID,
+				BidID:      rec.BidID,
+				Currency:   "USD",
+				LossReason: reason,
+			})
+			sendNotify(ctx, client, url, isWin, rec, log)
+			continue
+		}
+
+		// Legacy notice: OpenRTB HTTP even when the bid edge rode the internal
 		// gRPC twin — resolve the HTTP notify base for this endpoint. A
 		// grpc:// base here means the ;notify= suffix is missing from the
 		// exchange.dsp_endpoints entry: undeliverable, and silently dropped
@@ -1146,16 +1178,20 @@ func sendWinLossNotifications(ctx context.Context, client *http.Client, records 
 			url = fmt.Sprintf("%s/v1/openrtb/win?bid_id=%s&price=%.4f&clear_price=%.4f&campaign_id=%s&placement_id=%s",
 				base, rec.BidID, clearingPrice, minToWin, rec.Bid.CampaignID, placementID)
 		} else {
-			// Loss notification with reason
-			reason := 102 // outbid
-			if rec.Bid.Price < floorPrice {
-				reason = 100 // below floor
-			}
 			url = fmt.Sprintf("%s/v1/openrtb/loss?bid_id=%s&reason=%d&clearing_price=%.4f&campaign_id=%s&placement_id=%s",
 				base, rec.BidID, reason, clearingPrice, rec.Bid.CampaignID, placementID)
 		}
 		sendNotify(ctx, client, url, isWin, rec, log)
 	}
+}
+
+// noticeURLFor returns the buyer-supplied notice URL for the outcome, "" when
+// the bid carries none (→ legacy fixed-endpoint notice).
+func noticeURLFor(b auction.Bid, isWin bool) string {
+	if isWin {
+		return b.NURL
+	}
+	return b.LURL
 }
 
 // sendNotify is one win-or-loss notification with its own child span so each
@@ -1431,6 +1467,9 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 						MediaURL:     b.MediaURL,
 						AdM:          b.AdM,
 						Protocol:     b.Protocol,
+						NURL:         b.NURL,
+						LURL:         b.LURL,
+						BURL:         b.BURL,
 						AdvertiserID: sb.Seat, // self-declared — display/deal-match only, NOT billing
 						// Trusted billable seat = which configured endpoint this bid
 						// came from (data-fee attribution can't ride the self-declared seat).

@@ -34,8 +34,13 @@ type AuctionWinEvent struct {
 	// DSPs bid against. Carried here so the trace system can surface
 	// "Audience resolved: …" from the durable win record. Empty when consent
 	// suppressed stamping or the user matched no public segment.
-	Segments  []string  `json:"segments,omitempty"`
-	Timestamp time.Time `json:"timestamp"`
+	Segments []string `json:"segments,omitempty"`
+	// BillingURL is the buyer's burl (OpenRTB §4.4 billing notice), auction
+	// macros already substituted by the exchange at win time. The billing
+	// engine fires it when the impression BOOKS (the billable moment) via the
+	// durable burl_pending join — empty when the bid carried no burl.
+	BillingURL string    `json:"billing_url,omitempty"`
+	Timestamp  time.Time `json:"timestamp"`
 }
 
 // AuctionLossEvent is published by the DSP's loss-notice handler when our DSP's
