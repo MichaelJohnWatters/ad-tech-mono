@@ -376,5 +376,11 @@ help: ## Show this help
 
 .DEFAULT_GOAL := help
 
+bench: ## Hot-path micro-benchmarks (cluster-free): run + diff vs docs/perf/bench/baseline.txt via benchstat. Attributes a regression to a function+commit at PR time.
+	bash scripts/bench.sh
+
+bench-pin: ## Re-pin the micro-benchmark baseline (do deliberately after a known-good change; commit docs/perf/bench/baseline.txt in the same PR).
+	bash scripts/bench.sh --pin
+
 perfbench: ## Dated benchmark run(s): clean world per stage, ledger + raw Prometheus archive. RPS=110 DURATION=30m, or RPS_STAGES="20 50 80" for a sweep; PURGE=1 wipes PVCs first
 	scripts/perfbench.sh
