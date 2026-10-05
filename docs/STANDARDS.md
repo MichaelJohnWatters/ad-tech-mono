@@ -121,6 +121,7 @@ detail, and the change log at the bottom has commit-level notes.
 | Standard | Steward | Who it's for | Prominence | Our status | Where / notes |
 |---|---|---|---|---|---|
 | VAST 4.2 | IAB Tech Lab | Video ad serving | 🔴 | ✅ | `pkg/vast/vast.go`, `cmd/publisher-adserver/vast.go`, full tracking events |
+| VAST 4.2 §6 macros + §2.3.6.3 error codes | IAB Tech Lab | Player-substituted URI macros | 🔴 | ✅ | `[ERRORCODE]/[CACHEBUSTING]/[TIMESTAMP]/[ADPLAYHEAD]` emitted as unsigned params after the HMAC (`adserving.AppendClientMacroParams`); tracker validates via `mediaSigParams` filter, stores `media_events.error_code` (literal macro → 900 per spec); player half in `pkg/vast/macros.go` (sim) + `adtech.js` 2.1.0 |
 | VMAP 1.0 | IAB Tech Lab | Ad break scheduling | 🔴 | ✅ | `cmd/publisher-adserver/vmap.go` — pre/mid/post-roll, independent auctions |
 | OMID / Open Measurement | IAB Tech Lab | Viewability/verification | 🔴 | 🟨 | Server-side done: SSP signals `api:[7]` OMID, publisher-adserver emits `<AdVerifications>` (OM SDK script + signed verificationNotExecuted beacon) in VAST via `pkg/vast`, gated by `publisher_adserver.omid_verification_url`. Client-side OM SDK runtime (session JS) is out of scope (no OM SDK in-repo) |
 | SIMID 1.1 | IAB Tech Lab | Interactive video (VPAID successor) | 🟡 | 🟨 | Struct in `pkg/vast`; no runtime |

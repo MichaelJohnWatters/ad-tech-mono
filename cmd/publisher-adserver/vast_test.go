@@ -256,7 +256,14 @@ func urlIsHMACValid(t *testing.T, raw string) bool {
 		t.Errorf("parse %q: %v", raw, err)
 		return false
 	}
-	return adserving.ValidateSignature(u.Path, u.Query(), adserving.DefaultSigningKey)
+	// Strip the player-substituted bracket-macro params (ec/cb/ts/pos) the
+	// handler appends AFTER signing — the tracker's mediaSigParams does the
+	// same before validating, so this replays the real inbound check.
+	q := u.Query()
+	for _, k := range []string{"ec", "cb", "ts", "pos"} {
+		q.Del(k)
+	}
+	return adserving.ValidateSignature(u.Path, q, adserving.DefaultSigningKey)
 }
 
 // Two requests to the handler must produce two distinct VAST docs

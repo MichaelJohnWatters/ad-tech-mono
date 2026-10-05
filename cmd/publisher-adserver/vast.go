@@ -160,7 +160,7 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, omidFn
 			spec.Verifications = []vast.OMIDVerification{{
 				Vendor:         vendor,
 				ScriptURL:      scriptURL,
-				NotExecutedURL: adserving.BuildVideoEventURL(macroCtx, "omid-not-executed"),
+				NotExecutedURL: adserving.AppendClientMacroParams(adserving.BuildVideoEventURL(macroCtx, "omid-not-executed"), "omid-not-executed"),
 			}}
 		}
 		xmlBytes, err := vast.BuildLinearAd(spec)
@@ -307,7 +307,7 @@ func buildPodVAST(ctx context.Context, sspURL, trackerURL, secureBase string, r 
 			spec.Verifications = []vast.OMIDVerification{{
 				Vendor:         vendor,
 				ScriptURL:      scriptURL,
-				NotExecutedURL: adserving.BuildVideoEventURL(macroCtxForWinner(winner, trackerURL, secureBase), "omid-not-executed"),
+				NotExecutedURL: adserving.AppendClientMacroParams(adserving.BuildVideoEventURL(macroCtxForWinner(winner, trackerURL, secureBase), "omid-not-executed"), "omid-not-executed"),
 			}}
 		}
 		specs = append(specs, spec)
@@ -350,9 +350,11 @@ func buildVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext) vast
 	// tracker publishes typed VideoEvent on adtech.events.video — not
 	// conflated with display viewability on adtech.events.view.
 	// The event token is part of the signed URL so a replay with a
-	// different event invalidates the HMAC.
+	// different event invalidates the HMAC. The IAB bracket macros
+	// (cb/ts/pos, + ec on error) ride UNSIGNED after the sig for the
+	// player to substitute — the tracker filters them before validation.
 	beacon := func(ev string) string {
-		return adserving.BuildVideoEventURL(macroCtx, ev)
+		return adserving.AppendClientMacroParams(adserving.BuildVideoEventURL(macroCtx, ev), ev)
 	}
 
 	durationSec := winner.DurationSeconds

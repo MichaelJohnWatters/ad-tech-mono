@@ -108,7 +108,7 @@ func TestVideoTrackerEventReachesReporting(t *testing.T) {
 	}
 
 	harness.WaitFor(t, 5*time.Second, "video event recorded", func() bool {
-		return h.MediaEventsByTrace(t, traceID, "video", "start") >= 1
+		return h.MediaEventsByTrace(t, traceID, "video", "start", "") >= 1
 	})
 }
 
@@ -138,7 +138,7 @@ func TestAudioTrackerEventReachesReporting(t *testing.T) {
 	}
 
 	harness.WaitFor(t, 5*time.Second, "audio event recorded", func() bool {
-		return h.MediaEventsByTrace(t, traceID, "audio", "complete") >= 1
+		return h.MediaEventsByTrace(t, traceID, "audio", "complete", "") >= 1
 	})
 }
 

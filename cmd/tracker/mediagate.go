@@ -47,7 +47,10 @@ func (g mediaEventGate) allow(w http.ResponseWriter, r *http.Request, eventType,
 	q := r.URL.Query()
 	ctx := logger.WithTraceID(r.Context(), traceID)
 
-	sigOK := adserving.ValidateSignatureAny(r.URL.Path, q, g.sigKeys())
+	// Exclude the player-substituted bracket-macro params (ec/cb/ts/pos) from
+	// validation — they're appended after signing, exactly like the viewability
+	// beacon's dur/pct/area. Everything else, including event=, stays signed.
+	sigOK := adserving.ValidateSignatureAny(r.URL.Path, mediaSigParams(q), g.sigKeys())
 	if !sigOK {
 		reqLog.Warn("invalid signature", "path", r.URL.Path)
 		if g.sigValidation() {

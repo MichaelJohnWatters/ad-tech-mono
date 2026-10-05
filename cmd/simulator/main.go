@@ -143,6 +143,12 @@ type profile struct {
 	// pixel for this fraction of the clicks it fires (real conversions happen
 	// off-platform, so there's no human to generate them; we synthesise them).
 	ConvRate float64
+	// ErrorRate is P(playback error | VAST ad): the simulated player fires
+	// impression + start, then the <Error> URIs with [ERRORCODE]=405
+	// substituted, and stops (a spec player abandons after a fatal error).
+	// MUST stay 0 on perf profiles (trickle/burst) — an error shortens the
+	// beacon sequence and would skew loadtest baselines' completes-per-win.
+	ErrorRate float64
 }
 
 func personaPool(names ...string) []request.Persona {
@@ -169,7 +175,7 @@ var profiles = map[string]profile{
 		Name: "steady", RPS: 10,
 		Personas:   request.Personas, // full registry, weighted
 		Channels:   []channelWeight{{request.Display, 55}, {request.Native, 20}, {request.Video, 15}, {request.Audio, 10}},
-		FloorPrice: 1.00, ClickRate: 0.02, ViewPct: 70, ConvRate: 0.10,
+		FloorPrice: 1.00, ClickRate: 0.02, ViewPct: 70, ConvRate: 0.10, ErrorRate: 0.01,
 	},
 	// burst: high volume across every channel including audio + CTV personas.
 	"burst": {
@@ -187,7 +193,7 @@ var profiles = map[string]profile{
 		Name: "themed", RPS: 10,
 		Personas:   append(append([]request.Persona{}, request.Personas...), request.ThemedPersonas...),
 		Channels:   []channelWeight{{request.Display, 70}, {request.Native, 15}, {request.Video, 10}, {request.Audio, 5}},
-		FloorPrice: 1.00, ClickRate: 0.02, ViewPct: 70, ConvRate: 0.10,
+		FloorPrice: 1.00, ClickRate: 0.02, ViewPct: 70, ConvRate: 0.10, ErrorRate: 0.01,
 	},
 }
 
@@ -743,6 +749,9 @@ func printResults(sent, wins, errors int, elapsed time.Duration) {
 	fmt.Printf("  No-fill:    %d\n", sent-wins-errors)
 	if bl := atomic.LoadInt64(&beaconLost64); bl > 0 {
 		fmt.Printf("  Beacon-lost: %d (wins with undelivered impression beacon — expect analytics = wins - this)\n", bl)
+	}
+	if pe := atomic.LoadInt64(&playbackErrors64); pe > 0 {
+		fmt.Printf("  Playback-errors: %d (simulated VAST errors — these ads fired start + <Error> then stopped; completes = video wins - this)\n", pe)
 	}
 	fmt.Printf("  Errors:     %d\n", errors)
 	if elapsed.Seconds() > 0 {

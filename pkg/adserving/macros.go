@@ -250,6 +250,32 @@ func BuildAudioEventURL(ctx MacroContext, event string) string {
 	return SignURL(rawURL, ActiveSigningKey())
 }
 
+// AppendClientMacroParams appends UNSIGNED, player-substituted IAB
+// bracket-macro params (VAST 4.2 §6) to an already-signed media beacon
+// URL: cb=[CACHEBUSTING], ts=[TIMESTAMP], pos=[ADPLAYHEAD], plus
+// ec=[ERRORCODE] on error beacons. Appended AFTER SignURL on the
+// viewability-beacon precedent (dur/pct/area): the tracker excludes
+// exactly these params from signature validation (mediaSigParams in
+// cmd/tracker) — event and every identity param stay inside the HMAC.
+//
+// The tokens are appended as raw literals, NOT url.Values-encoded:
+// players substitute by literal text replacement, and an encoded
+// %5BERRORCODE%5D is invisible to them. Only call this on PLAYER-facing
+// URLs (publisher-adserver VAST/audio output) — server-fired beacons
+// (SSAI stitcher, simulator --direct) must keep macro-free URLs or the
+// tokens arrive unsubstituted.
+func AppendClientMacroParams(signedURL, event string) string {
+	sep := "&"
+	if !strings.Contains(signedURL, "?") {
+		sep = "?"
+	}
+	out := signedURL + sep + "cb=[CACHEBUSTING]&ts=[TIMESTAMP]&pos=[ADPLAYHEAD]"
+	if event == "error" {
+		out += "&ec=[ERRORCODE]"
+	}
+	return out
+}
+
 // setExp adds an exp=<unix-seconds> param to a tracker-URL param set
 // when ttl > 0. Covered by the HMAC because it's added before SignURL,
 // so any rewrite invalidates the sig. The tracker rejects requests with

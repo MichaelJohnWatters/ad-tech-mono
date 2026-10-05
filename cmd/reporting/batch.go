@@ -464,7 +464,7 @@ func (c *EventConsumer) handleVideoBatch(ctx context.Context, msgs []*events.Mes
 				PositionMs: src.PositionMs, CampaignID: src.CampaignID,
 				CreativeID: src.CreativeID, PlacementID: src.PlacementID,
 				PublisherID: src.PublisherID, AccountID: src.AccountID,
-				Timestamp: src.Timestamp,
+				ErrorCode: int32(src.ErrorCode), Timestamp: src.Timestamp,
 			}, true
 		},
 		nil, // audio quartiles: several legitimate events per trace
@@ -513,7 +513,7 @@ func (c *EventConsumer) handleAudioBatch(ctx context.Context, msgs []*events.Mes
 				PositionMs: src.PositionMs, CampaignID: src.CampaignID,
 				CreativeID: src.CreativeID, PlacementID: src.PlacementID,
 				PublisherID: src.PublisherID, AccountID: src.AccountID,
-				Timestamp: src.Timestamp,
+				ErrorCode: int32(src.ErrorCode), Timestamp: src.Timestamp,
 			}, true
 		},
 		nil, // media quartiles: several legitimate events per trace

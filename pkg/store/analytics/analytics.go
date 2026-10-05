@@ -265,7 +265,7 @@ type DebugReader interface {
 	TrackerRejectionsByTrace(traceID, reason string) []TrackerRejection
 	TrackerRejectionsByReason(reason string) int
 	ServeNoFillsByTrace(traceID string) int
-	MediaEventsByTrace(traceID, channel, eventType string) int
+	MediaEventsByTrace(traceID, channel, eventType, errorCode string) int
 }
 
 var (

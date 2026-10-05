@@ -408,7 +408,8 @@ func main() {
 			traceID := r.URL.Query().Get("trace_id")
 			channel := r.URL.Query().Get("channel")
 			eventType := r.URL.Query().Get("event_type")
-			json.NewEncoder(w).Encode(map[string]int{"count": dbg.MediaEventsByTrace(traceID, channel, eventType)})
+			errorCode := r.URL.Query().Get("error_code") // numeric string; "" = no filter
+			json.NewEncoder(w).Encode(map[string]int{"count": dbg.MediaEventsByTrace(traceID, channel, eventType, errorCode)})
 		})
 
 		// Trigger a rollup run on demand (ops + e2e). Works on any backend
@@ -1005,7 +1006,8 @@ func (c *EventConsumer) handleVideo(ctx context.Context, msg *events.Message) er
 		EventType: src.EventType, PositionMs: src.PositionMs,
 		CampaignID: src.CampaignID, CreativeID: src.CreativeID,
 		PlacementID: src.PlacementID, PublisherID: src.PublisherID,
-		AccountID: src.AccountID, Timestamp: src.Timestamp,
+		AccountID: src.AccountID, ErrorCode: int32(src.ErrorCode),
+		Timestamp: src.Timestamp,
 	}); err != nil {
 		c.log.Error("insert video media event", "error", err, "trace_id", src.TraceID)
 	}
@@ -1025,7 +1027,8 @@ func (c *EventConsumer) handleAudio(ctx context.Context, msg *events.Message) er
 		EventType: src.EventType, PositionMs: src.PositionMs,
 		CampaignID: src.CampaignID, CreativeID: src.CreativeID,
 		PlacementID: src.PlacementID, PublisherID: src.PublisherID,
-		AccountID: src.AccountID, Timestamp: src.Timestamp,
+		AccountID: src.AccountID, ErrorCode: int32(src.ErrorCode),
+		Timestamp: src.Timestamp,
 	}); err != nil {
 		c.log.Error("insert audio media event", "error", err, "trace_id", src.TraceID)
 	}
