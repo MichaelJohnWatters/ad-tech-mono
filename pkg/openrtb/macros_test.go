@@ -31,3 +31,28 @@ func TestExpandAuctionMacros(t *testing.T) {
 		t.Errorf("display HTML substitution wrong: %s", out)
 	}
 }
+
+// TestExpandNoticeMacros: the buyer-supplied nurl/lurl/burl macro set —
+// clearing price, min-to-win, bid id, loss reason — substituted with no
+// literal ${AUCTION_*} surviving; macro-free URLs untouched.
+func TestExpandNoticeMacros(t *testing.T) {
+	u := "http://dsp:8082/v1/openrtb/win?bid_id=${AUCTION_BID_ID}&price=${AUCTION_PRICE}&clear_price=${AUCTION_MIN_TO_WIN}&a=${AUCTION_ID}&cur=${AUCTION_CURRENCY}&imp=${AUCTION_IMP_ID}&reason=${AUCTION_LOSS}"
+	out := ExpandNoticeMacros(u, NoticeMacros{
+		Price: 4.25, MinToWin: 3.1, AuctionID: "tr-1", BidID: "bid-9",
+		ImpID: "imp-1", Currency: "USD", LossReason: 102,
+	})
+	for _, want := range []string{"bid_id=bid-9", "price=4.2500", "clear_price=3.1000", "a=tr-1", "cur=USD", "imp=imp-1", "reason=102"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("notice URL missing %q: %s", want, out)
+		}
+	}
+	if strings.Contains(out, "${") {
+		t.Errorf("unsubstituted notice macro left behind: %s", out)
+	}
+	if got := ExpandNoticeMacros("http://x/no-macros", NoticeMacros{}); got != "http://x/no-macros" {
+		t.Errorf("macro-free URL must be untouched, got %q", got)
+	}
+	if got := ExpandNoticeMacros("", NoticeMacros{}); got != "" {
+		t.Errorf("empty URL must stay empty")
+	}
+}

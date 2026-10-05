@@ -574,6 +574,10 @@ const (
 	OpenRTBAuction = "/v1/openrtb/auction"
 	OpenRTBWin     = "/v1/openrtb/win"
 	OpenRTBLoss    = "/v1/openrtb/loss"
+	// OpenRTBBilling receives the buyer's burl billing notice (OpenRTB 2.5+):
+	// fired by the SELLER side at the billable moment (impression booked),
+	// distinct from the win notice which fires at auction time.
+	OpenRTBBilling = "/v1/openrtb/billing"
 	// PrebidAuction is the Prebid Server-compatible bidder endpoint.
 	// External Prebid Server instances POST OpenRTB 2.x bid requests here;
 	// we apply our floor policy then dispatch through the normal auction.

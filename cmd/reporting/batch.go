@@ -166,6 +166,7 @@ func (c *EventConsumer) handleImpressionBatch(ctx context.Context, msgs []*event
 			for _, e := range es {
 				c.dataFee.AccrueOnImpression(ctx, e.TraceID)
 				c.marketplace.AccrueOnImpression(ctx, e)
+				c.burl.FireOnImpression(ctx, e.TraceID) // OpenRTB billing notice
 			}
 			if c.billing == nil {
 				return
@@ -334,6 +335,9 @@ func (c *EventConsumer) handleAuctionWinBatch(ctx context.Context, msgs []*event
 			if src.Timestamp.IsZero() {
 				src.Timestamp = time.Now()
 			}
+			// Park the buyer's billing notice (burl) until the impression
+			// books — idempotent per trace, so a batch Nak/redelivery is safe.
+			c.burl.ParkFromWin(ctx, src.TraceID, src.BillingURL)
 			return &analytics.AuctionWinEvent{
 				TraceID: src.TraceID, AuctionID: src.AuctionID, WinnerDSP: src.WinnerDSP,
 				CampaignID: src.CampaignID, CreativeID: src.CreativeID, PlacementID: src.PlacementID,

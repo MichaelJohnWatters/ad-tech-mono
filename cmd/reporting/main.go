@@ -164,6 +164,8 @@ func main() {
 			// Data-marketplace surcharge settlement (PLAN Phase 10) shares the DB.
 			consumer.SetMarketplaceAccrual(newMarketplaceAccrual(dfDB,
 				func() float64 { return keys.Reporting.MarketplaceSurchargeMarginPct.Get(cfg) }, log))
+			// OpenRTB burl billing notices share the DB too (burl_pending join).
+			consumer.SetBurlNotifier(newBurlNotifier(dfDB, log))
 		} else {
 			log.Warn("data-fee accrual disabled (postgres open failed)", "error", err)
 		}
@@ -541,6 +543,9 @@ type EventConsumer struct {
 	dedupTTL     time.Duration
 	batchEnabled bool
 
+	// burl fires the buyer's OpenRTB billing notice at the billable moment
+	// (impression booked) via the durable burl_pending join. Nil-tolerant.
+	burl *burlNotifier
 	// dataFee settles parked data-monetization attribution at impression
 	// time (datafee.go). nil = feature off (no Postgres) — all hooks no-op.
 	dataFee *dataFeeAccrual
@@ -557,6 +562,9 @@ type EventConsumer struct {
 
 // SetDataFeeAccrual connects data-monetization accrual (nil-tolerant).
 func (c *EventConsumer) SetDataFeeAccrual(a *dataFeeAccrual) { c.dataFee = a }
+
+// SetBurlNotifier connects OpenRTB billing-notice firing (nil-tolerant).
+func (c *EventConsumer) SetBurlNotifier(b *burlNotifier) { c.burl = b }
 
 // SetMarketplaceAccrual connects data-marketplace surcharge settlement (nil-tolerant).
 func (c *EventConsumer) SetMarketplaceAccrual(a *marketplaceAccrual) { c.marketplace = a }
@@ -743,6 +751,9 @@ func (c *EventConsumer) handleImpression(ctx context.Context, msg *events.Messag
 	// impression is already recorded and billed.
 	c.dataFee.AccrueOnImpression(ctx, e.TraceID)
 	c.marketplace.AccrueOnImpression(ctx, &e)
+	// OpenRTB burl: the billable moment — fire the buyer's parked billing
+	// notice (single PK probe, near-always a miss; never blocks the Ack).
+	c.burl.FireOnImpression(ctx, e.TraceID)
 
 	c.log.Debug("impression recorded + billed", "trace_id", e.TraceID, "campaign_id", e.CampaignID)
 	return msg.Ack()
@@ -906,6 +917,8 @@ func (c *EventConsumer) handleAuctionWin(ctx context.Context, msg *events.Messag
 		c.log.Error("failed to write auction win", "error", err, "trace_id", e.TraceID)
 		return msg.Nak()
 	}
+	// Park the buyer's billing notice (burl) until the impression books.
+	c.burl.ParkFromWin(ctx, src.TraceID, src.BillingURL)
 	c.log.Debug("auction win recorded", "trace_id", e.TraceID, "campaign_id", e.CampaignID, "price", e.ClearingPrice)
 	return msg.Ack()
 }

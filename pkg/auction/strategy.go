@@ -42,18 +42,24 @@ type Strategy interface {
 
 // Bid represents a single bid from a DSP.
 type Bid struct {
-	DSPID        string
-	CampaignID   string
-	CreativeID   string
-	Price        float64
-	Currency     string
-	BidModel     string // cpm, cpc, cpa, vcpm, cpcv, cpi
-	Duration     int    // seconds (for video/audio)
-	Width        int    // creative pixel width
-	Height       int    // creative pixel height
-	MediaURL     string // video / audio media file URL — passed through to the winning OpenRTB BidObj.MediaURL
-	AdM          string // ad markup — native response JSON or VAST XML (video/audio), passed through to the winning BidObj.AdM
-	Protocol     int    // AdCOM creative subtype the AdM declares (13 = VAST 4.2) — passed through to BidObj.Protocol
+	DSPID      string
+	CampaignID string
+	CreativeID string
+	Price      float64
+	Currency   string
+	BidModel   string // cpm, cpc, cpa, vcpm, cpcv, cpi
+	Duration   int    // seconds (for video/audio)
+	Width      int    // creative pixel width
+	Height     int    // creative pixel height
+	MediaURL   string // video / audio media file URL — passed through to the winning OpenRTB BidObj.MediaURL
+	AdM        string // ad markup — native response JSON or VAST XML (video/audio), passed through to the winning BidObj.AdM
+	Protocol   int    // AdCOM creative subtype the AdM declares (13 = VAST 4.2) — passed through to BidObj.Protocol
+	// Buyer-supplied notice URLs (OpenRTB §4.4): the exchange substitutes the
+	// auction macros and fires nurl on win / lurl on loss; burl rides the
+	// AuctionWinEvent and fires at the billable moment (impression booked).
+	NURL         string
+	LURL         string
+	BURL         string
 	AdvertiserID string
 	// SettlementSeat is the TRUSTED billable seat for data-fee attribution, set
 	// by the exchange from WHICH configured endpoint returned this bid (never the
