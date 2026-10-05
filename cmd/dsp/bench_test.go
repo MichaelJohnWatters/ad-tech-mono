@@ -55,6 +55,92 @@ func BenchmarkDSPBidPath(b *testing.B) {
 	}
 }
 
+// BenchmarkDSPBidPathThroughput reports the COMPUTE-CEILING throughput of the
+// per-request bid decision (the whole warm-cache campaign loop) across all
+// GOMAXPROCS cores, as bids-evaluated/sec — "how fast could the bid MATH go"
+// with zero I/O. Crank with `-cpu 1,2,4,8 -benchtime=10s`.
+//
+// CRITICAL: NOT platform throughput — the live DSP is gated by the network
+// (exchange fan-out), Redis/Postgres warm-cache refresh, and GC under load,
+// not this loop. Real rps lives in `make perfbench`. This ceiling just shows
+// the bid loop has headroom (and, at 0 allocs/op, won't pressure GC).
+func BenchmarkDSPBidPathThroughput(b *testing.B) {
+	campaigns := makeBenchCampaigns(200)
+	req := targeting.Request{
+		Geo: "USA", Device: "mobile", OS: "iOS",
+		Segments: []string{"sports_fans", "auto_intenders"},
+		Domain:   "demo-news.example", Channel: "display",
+		Categories: []string{"IAB1", "IAB17"},
+	}
+	b.ResetTimer()
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			eligible := 0
+			for j := range campaigns {
+				c := &campaigns[j]
+				if selectCreativeForSize(c, 300, 250) == "" {
+					continue
+				}
+				if !targeting.Evaluate(c.Targeting, req).Matched {
+					continue
+				}
+				eligible++
+			}
+			_ = eligible
+		}
+	})
+	// Each op is one full request evaluated against the whole book.
+	b.ReportMetric(float64(b.N)/b.Elapsed().Seconds(), "bidreqs/sec")
+}
+
+// BenchmarkDSPBidPathProfiles benches the bid loop against DISTINCT request
+// styles — the cost of targeting.Evaluate depends on how much targeting a
+// request/book actually carries, not just the campaign count:
+//   - broad:  geo/device only (most campaigns match cheaply)
+//   - dense:  geo+device+segments+categories+keywords all evaluated
+//   - video:  non-display format path (creative falls back to primary, video channel)
+//
+// All run against the same 200-campaign warm set. Add a row to profile another
+// channel/targeting style (native, retail relevance, DOOH) — see the skill.
+func BenchmarkDSPBidPathProfiles(b *testing.B) {
+	campaigns := makeBenchCampaigns(200)
+	profiles := map[string]targeting.Request{
+		"broad": {Geo: "USA", Device: "mobile", Channel: "display"},
+		"dense": {
+			Geo: "USA", Device: "mobile", OS: "iOS",
+			Segments:   []string{"sports_fans", "auto_intenders", "in_market_auto"},
+			Categories: []string{"IAB1", "IAB17", "IAB3"},
+			Keywords:   []string{"ev", "sedan", "lease"},
+			Domain:     "demo-news.example", Channel: "display",
+		},
+		"video": {Geo: "USA", Device: "ctv", Channel: "video"},
+	}
+	for name, req := range profiles {
+		b.Run(name, func(b *testing.B) {
+			reqW, reqH := 300, 250
+			if req.Channel != "display" {
+				reqW, reqH = 0, 0 // non-display: creative falls back to primary
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				eligible := 0
+				for j := range campaigns {
+					c := &campaigns[j]
+					if selectCreativeForSize(c, reqW, reqH) == "" {
+						continue
+					}
+					if !targeting.Evaluate(c.Targeting, req).Matched {
+						continue
+					}
+					eligible++
+				}
+				_ = eligible
+			}
+		})
+	}
+}
+
 // makeBenchCampaigns builds a realistic warm-cache campaign set: a mix of
 // matching and non-matching targeting + a 300x250 creative variant, so both
 // the short-circuit (no creative / excluded) and the full-match paths are

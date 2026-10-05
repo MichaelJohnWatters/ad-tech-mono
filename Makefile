@@ -382,5 +382,8 @@ bench: ## Hot-path micro-benchmarks (cluster-free): run + diff vs docs/perf/benc
 bench-pin: ## Re-pin the micro-benchmark baseline (do deliberately after a known-good change; commit docs/perf/bench/baseline.txt in the same PR).
 	bash scripts/bench.sh --pin
 
+bench-profile: ## Profile ONE hot-path bench (CPU+mem) and print top hotspots — the "where" after bench flags a regression. Usage: make bench-profile BENCH=BenchmarkExchangeAuction PKG=./pkg/auction
+	bash scripts/bench.sh --profile "$(BENCH)" "$(PKG)"
+
 perfbench: ## Dated benchmark run(s): clean world per stage, ledger + raw Prometheus archive. RPS=110 DURATION=30m, or RPS_STAGES="20 50 80" for a sweep; PURGE=1 wipes PVCs first
 	scripts/perfbench.sh
