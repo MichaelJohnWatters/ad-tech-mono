@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -606,6 +607,66 @@ func (deps audienceDeps) runInline(w http.ResponseWriter, r *http.Request, jobID
 // audienceIngestStatusHandler serves GET /v1/api/audiences/ingest/{id} —
 // tenant-scoped job status (queued/running/done/failed) with the terminal
 // counts + match rate.
+// audienceInspectHandler serves the two read-only audience-inspection
+// endpoints behind audiences:read, both tenant-scoped to the session account:
+//
+//	GET /v1/api/audiences/members/{segment_id}?limit=N — member sample with
+//	    per-row graph_known (the row-level truth behind match_rate)
+//	GET /v1/api/audiences/check?user_id=H — "test a hash": which of MY
+//	    segments contain it + is it known to the identity graph
+func audienceInspectHandler(deps audienceDeps) http.HandlerFunc {
+	store, log := deps.store, deps.log
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := middleware.ClaimsFromContext(r.Context())
+		if claims == nil {
+			http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodGet {
+			http.Error(w, `{"error":"method not allowed"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		accountID, ok := effectiveAccount(r, claims)
+		if !ok || !canAs(r, claims, "audiences:read") {
+			http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
+			return
+		}
+		if store == nil {
+			http.Error(w, `{"error":"audience store unavailable"}`, http.StatusServiceUnavailable)
+			return
+		}
+		if strings.HasPrefix(r.URL.Path, routes.APIAudienceMembers) {
+			segID := strings.Trim(strings.TrimPrefix(r.URL.Path, routes.APIAudienceMembers), "/")
+			if _, err := uuid.Parse(segID); err != nil {
+				http.Error(w, `{"error":"invalid segment id"}`, http.StatusBadRequest)
+				return
+			}
+			limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+			members, err := store.SegmentMembers(r.Context(), accountID, segID, limit)
+			if err != nil {
+				log.Error("segment members failed", "segment", segID, "error", err)
+				http.Error(w, `{"error":"lookup failed"}`, http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"members": members})
+			return
+		}
+		userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+		if userID == "" || len(userID) > 256 {
+			http.Error(w, `{"error":"user_id required (max 256 chars)"}`, http.StatusBadRequest)
+			return
+		}
+		segs, known, err := store.CheckUser(r.Context(), accountID, userID)
+		if err != nil {
+			log.Error("audience check failed", "error", err)
+			http.Error(w, `{"error":"lookup failed"}`, http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"segments": segs, "graph_known": known})
+	}
+}
+
 func audienceIngestStatusHandler(ingestStore ingestjobs.Store, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.ClaimsFromContext(r.Context())

@@ -560,6 +560,10 @@ func main() {
 	mux.Handle(routes.APIAudienceProviders+"/", authMiddleware(http.HandlerFunc(audienceProvidersHandler(providerStore, log))))
 	mux.Handle(routes.APIAudienceProviders, authMiddleware(http.HandlerFunc(audienceProvidersHandler(providerStore, log))))
 	mux.Handle(routes.APIAudiences, authMiddleware(http.HandlerFunc(audienceHandler(audDeps))))
+	// Read-only audience inspection: member sample (per-row match report) +
+	// the "test a hash" check. More specific than the base /audiences.
+	mux.Handle(routes.APIAudienceMembers, authMiddleware(http.HandlerFunc(audienceInspectHandler(audDeps))))
+	mux.Handle(routes.APIAudienceCheck, authMiddleware(http.HandlerFunc(audienceInspectHandler(audDeps))))
 	// DPA slice 1: the advertiser product catalog (feed upload rides the same
 	// ingest queue as audience files, kind=product; list reads the products table).
 	var productCatalogStore *catalogpg.Store

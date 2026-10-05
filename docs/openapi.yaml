@@ -2143,6 +2143,36 @@ paths:
       security: [{ bearerAuth: [] }]
       responses:
         "200": { description: "{ jobs: [{ id, name, source, status, valid_rows, rejected_rows, match_rate, error?, created_at, finished_at? }] }" }
+  /v1/api/audiences/members/:
+    get:
+      tags: [Audiences]
+      summary: Member sample for a segment (per-row match report)
+      description: >-
+        GET /v1/api/audiences/members/{segment_id}?limit=N (default 25, max
+        200) — newest members first, each with the hashed id, the writer that
+        enrolled it (api | dropzone:provider | identity-expansion |
+        retargeting…), when, and graph_known: whether the identity graph can
+        resolve the id. graph_known is the row-level truth behind the
+        segment's aggregate match_rate. Tenant-scoped — another account's
+        segment id returns an empty list.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ members: [{ user_id, source, added_at, graph_known }] }" }
+        "400": { description: "invalid segment id" }
+  /v1/api/audiences/check:
+    get:
+      tags: [Audiences]
+      summary: Test a hash — membership + identity-graph reachability
+      description: >-
+        GET /v1/api/audiences/check?user_id=H — which of the CALLER'S OWN
+        segments contain this id, and whether the identity graph has ever
+        observed it (i.e. would a CRM row with this hash be matchable).
+        Clients hash emails before calling (hash-before-transmission — the
+        portal does this automatically for @-inputs). Max 256 chars.
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ segments: [names…], graph_known: bool }" }
+        "400": { description: "user_id required (max 256 chars)" }
   /v1/api/audiences/pgp-key:
     get:
       tags: [Audiences]
@@ -2732,20 +2762,36 @@ paths:
   /v1/t/video:
     get:
       tags: [Tracker]
-      summary: Video quartile event
+      summary: Video quartile / error event
+      description: >-
+        tid/event/attribution/sig are HMAC-signed by the server. ec/cb/ts/pos
+        are UNSIGNED, player-substituted IAB bracket macros (VAST 4.2 §6)
+        appended after signing — the tracker excludes exactly these four from
+        signature validation. ec (VAST error code) is honored only on
+        event=error: a valid table code is stored, a literal "[ERRORCODE]"
+        records 900 (macro-incapable player), anything else records 0.
       parameters:
         - { name: tid, in: query, schema: { type: string } }
-        - { name: event, in: query, schema: { type: string, enum: [start, firstQuartile, midpoint, thirdQuartile, complete] } }
+        - { name: event, in: query, schema: { type: string, enum: [start, firstQuartile, midpoint, thirdQuartile, complete, mute, unmute, pause, resume, skip, fullscreen, error] } }
         - { name: sig, in: query, schema: { type: string } }
+        - { name: ec, in: query, schema: { type: string }, description: "VAST 4.2 error code, player-substituted [ERRORCODE]; unsigned" }
+        - { name: cb, in: query, schema: { type: string }, description: "player-substituted [CACHEBUSTING]; unsigned, not stored" }
+        - { name: ts, in: query, schema: { type: string }, description: "player-substituted [TIMESTAMP] (ISO 8601); unsigned, not stored" }
+        - { name: pos, in: query, schema: { type: string }, description: "player-substituted [ADPLAYHEAD] (HH:MM:SS.mmm) → position_ms; unsigned" }
       responses: { "204": { description: Recorded } }
   /v1/t/audio:
     get:
       tags: [Tracker]
-      summary: Audio quartile event
+      summary: Audio quartile / error event
+      description: Same contract as /v1/t/video, including the unsigned ec/cb/ts/pos bracket-macro params.
       parameters:
         - { name: tid, in: query, schema: { type: string } }
         - { name: event, in: query, schema: { type: string } }
         - { name: sig, in: query, schema: { type: string } }
+        - { name: ec, in: query, schema: { type: string }, description: "VAST error code on event=error; unsigned" }
+        - { name: cb, in: query, schema: { type: string }, description: "cache buster; unsigned, not stored" }
+        - { name: ts, in: query, schema: { type: string }, description: "ISO 8601 timestamp; unsigned, not stored" }
+        - { name: pos, in: query, schema: { type: string }, description: "playhead HH:MM:SS.mmm → position_ms; unsigned" }
       responses: { "204": { description: Recorded } }
   /v1/t/rt:
     get:
