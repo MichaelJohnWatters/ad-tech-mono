@@ -1372,9 +1372,16 @@ func bidHandler(log *slog.Logger, clk clock.Clock, campaigns *warm.Cache[models.
 		// (MediaURL stays as the back-compat ext). Built here on the FINAL
 		// winner only — never inside the per-campaign loop (hot-path iron
 		// rule), and it's a pure in-memory marshal. Protocol declares the
-		// emitted document honestly (AdCOM 13 = VAST 4.2).
+		// emitted document honestly (AdCOM 13 = VAST 4.2 inline, 14 =
+		// Wrapper for third-party tag creatives).
 		if reqFormat == "video" || reqFormat == "audio" {
-			if adm, ok := buildMediaAdM(bestCampaign, bestBid, reqFormat); ok {
+			if tagURL := vastTagForBid(bestCampaign, bestBid.CrID); tagURL != "" {
+				if adm, ok := buildWrapperAdM(bestBid, tagURL); ok {
+					bestBid.AdM = adm
+					bestBid.Protocol = openrtb.ProtocolVAST42Wrapper
+					bestBid.MediaURL = "" // no hosted media — the tag supplies it
+				}
+			} else if adm, ok := buildMediaAdM(bestCampaign, bestBid, reqFormat); ok {
 				bestBid.AdM = adm
 				bestBid.Protocol = openrtb.ProtocolVAST42
 			}
@@ -1462,7 +1469,9 @@ func selectCreativeForRequest(c *models.Campaign, format string, reqW, reqH, min
 			if maxDur > 0 && cv.Duration > maxDur {
 				continue
 			}
-			if cv.MediaURL == "" {
+			// Either a hosted media asset (InLine bid) or a third-party
+			// VAST tag (Wrapper bid) makes the creative servable.
+			if cv.MediaURL == "" && cv.VASTTagURL == "" {
 				continue
 			}
 			return cv

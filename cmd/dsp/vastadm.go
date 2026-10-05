@@ -60,6 +60,35 @@ func buildMediaAdM(c *models.Campaign, bid *openrtb.BidObj, format string) (stri
 	return string(xmlBytes), true
 }
 
+// vastTagForBid returns the selected creative's third-party VAST tag URL
+// ("" for hosted-asset creatives). Looked up by the bid's creative id on the
+// final winner only — same off-hot-loop discipline as buildMediaAdM.
+func vastTagForBid(c *models.Campaign, creativeID string) string {
+	for i := range c.Creatives {
+		if c.Creatives[i].ID == creativeID {
+			return c.Creatives[i].VASTTagURL
+		}
+	}
+	return ""
+}
+
+// buildWrapperAdM builds the Wrapper bid markup for a third-party VAST tag
+// creative (VAST 4.2 §3.19): VASTAdTagURI = the tag, NO DSP-side trackers
+// (same decision as buildMediaAdM — the platform injects its signed set at
+// wrapper level in the publisher-adserver). The PLAYER resolves the chain;
+// no server in this platform fetches the tag.
+func buildWrapperAdM(bid *openrtb.BidObj, tagURL string) (string, bool) {
+	xmlBytes, err := vast.BuildWrapperAd(vast.WrapperSpec{
+		AdID:         bid.CrID,
+		AdSystem:     "ad-tech-mono-dsp",
+		VASTAdTagURI: tagURL,
+	})
+	if err != nil {
+		return "", false
+	}
+	return string(xmlBytes), true
+}
+
 // mediaMIME infers the MediaFile MIME from the URL extension, defaulting to
 // the format's canonical type (video/mp4, audio/mpeg).
 func mediaMIME(mediaURL, format string) string {

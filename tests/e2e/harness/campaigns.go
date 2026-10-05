@@ -182,6 +182,57 @@ ON CONFLICT (line_item_id, creative_id) DO NOTHING`
 	}
 }
 
+// CreateVideoWrapperCampaign is CreateVideoCampaign's third-party-tag
+// sibling: the creative carries vast_tag_url (and NO asset_url), so the DSP
+// bids a VAST 4.2 Wrapper (AdCOM protocol 14) whose VASTAdTagURI points at
+// tagURL — the player resolves the chain.
+func (h *Harness) CreateVideoWrapperCampaign(t *testing.T, owner Account, io InsertionOrder, externalKey string, baseBid, dailyBudget float64, creativeExternalKey, creativeDomain, tagURL string, durationSec int, targeting Targeting) Campaign {
+	t.Helper()
+	if owner.Type != "advertiser" {
+		t.Fatalf("CreateVideoWrapperCampaign: owner must be an advertiser account")
+	}
+	lineItemID := idgen.Derive("line_item", externalKey)
+	creativeID := idgen.Derive("creative", creativeExternalKey)
+	targetingID := idgen.Derive("targeting", externalKey)
+
+	h.WithTenant(t, owner.ID, func(tx *sql.Tx) {
+		const liQ = `
+INSERT INTO line_items (id, account_id, insertion_order_id, name, status, format, bid_strategy, base_bid, bid_currency, daily_budget, pacing_mode, shading_mode, creative_rotation, timezone, created_at, updated_at)
+VALUES ($1, $2, $3, $4, 'live', 'video', 'cpm', $5, 'USD', $6, 'asap', 'disabled', 'bandit', 'UTC', now(), now())
+ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, format = 'video', base_bid = EXCLUDED.base_bid, daily_budget = EXCLUDED.daily_budget, updated_at = now()`
+		if _, err := tx.Exec(liQ, lineItemID, owner.ID, io.ID, externalKey, baseBid, dailyBudget); err != nil {
+			t.Fatalf("wrapper line_items insert: %v", err)
+		}
+		const trQ = `
+INSERT INTO targeting_rules (id, line_item_id, account_id, include_geo, include_device, bid_modifiers, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, '{}', now(), now())
+ON CONFLICT (line_item_id) DO UPDATE SET include_geo = EXCLUDED.include_geo, include_device = EXCLUDED.include_device, updated_at = now()`
+		if _, err := tx.Exec(trQ, targetingID, lineItemID, owner.ID, pq.StringArray(targeting.Geos), pq.StringArray(targeting.Devices)); err != nil {
+			t.Fatalf("wrapper targeting_rules insert: %v", err)
+		}
+		const crQ = `
+INSERT INTO creatives (id, account_id, name, format, width, height, duration_seconds, asset_url, vast_tag_url, landing_url, review_status, created_at, updated_at)
+VALUES ($1, $2, $3, 'video', 640, 360, $4, NULL, $5, $6, 'approved', now(), now())
+ON CONFLICT (id) DO UPDATE SET vast_tag_url = EXCLUDED.vast_tag_url, asset_url = NULL, duration_seconds = EXCLUDED.duration_seconds, updated_at = now()`
+		landing := "https://" + creativeDomain
+		if _, err := tx.Exec(crQ, creativeID, owner.ID, creativeExternalKey, durationSec, tagURL, landing); err != nil {
+			t.Fatalf("wrapper creatives insert: %v", err)
+		}
+		const linkQ = `
+INSERT INTO line_item_creatives (line_item_id, creative_id, weight) VALUES ($1, $2, 100)
+ON CONFLICT (line_item_id, creative_id) DO NOTHING`
+		if _, err := tx.Exec(linkQ, lineItemID, creativeID); err != nil {
+			t.Fatalf("wrapper line_item_creatives insert: %v", err)
+		}
+	})
+
+	return Campaign{
+		ID: lineItemID, ExternalID: externalKey,
+		AccountID: owner.ID, IOId: io.ID, CreativeID: creativeID,
+		DailyBudget: dailyBudget, Status: "live",
+	}
+}
+
 // CreateDeal inserts a PG/Preferred/PMP deal between a publisher and one or
 // more advertisers. Empty advertiserAccountIDs = open to all (PMPs usually
 // have a non-empty list).
