@@ -1,60 +1,90 @@
-BenchmarkExchangeAuction/bids=2-12        	  836901	      1282 ns/op	    2216 B/op	      10 allocs/op
-BenchmarkExchangeAuction/bids=2-12        	  779894	      1341 ns/op	    2216 B/op	      10 allocs/op
-BenchmarkExchangeAuction/bids=2-12        	  860790	      1477 ns/op	    2216 B/op	      10 allocs/op
-BenchmarkExchangeAuction/bids=2-12        	  852757	      1596 ns/op	    2216 B/op	      10 allocs/op
-BenchmarkExchangeAuction/bids=2-12        	  831578	      1571 ns/op	    2216 B/op	      10 allocs/op
-BenchmarkExchangeAuction/bids=2-12        	  741538	      1707 ns/op	    2216 B/op	      10 allocs/op
-BenchmarkExchangeAuction/bids=5-12        	  288853	      4217 ns/op	    7832 B/op	      17 allocs/op
-BenchmarkExchangeAuction/bids=5-12        	  342702	      3781 ns/op	    7832 B/op	      17 allocs/op
-BenchmarkExchangeAuction/bids=5-12        	  375195	      4192 ns/op	    7832 B/op	      17 allocs/op
-BenchmarkExchangeAuction/bids=5-12        	  341152	      4373 ns/op	    7832 B/op	      17 allocs/op
-BenchmarkExchangeAuction/bids=5-12        	  282950	      5275 ns/op	    7832 B/op	      17 allocs/op
-BenchmarkExchangeAuction/bids=5-12        	  177548	      5756 ns/op	    7832 B/op	      17 allocs/op
-BenchmarkExchangeAuction/bids=25-12       	   38694	     33886 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuction/bids=25-12       	   39453	     29306 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuction/bids=25-12       	   51414	     23908 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuction/bids=25-12       	   46411	     22732 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuction/bids=25-12       	   56785	     26984 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuction/bids=25-12       	   38874	     26260 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuction/bids=100-12      	    8556	    118760 ns/op	  176944 B/op	     124 allocs/op
-BenchmarkExchangeAuction/bids=100-12      	    9511	    145805 ns/op	  176944 B/op	     124 allocs/op
-BenchmarkExchangeAuction/bids=100-12      	    9759	    134828 ns/op	  176944 B/op	     124 allocs/op
-BenchmarkExchangeAuction/bids=100-12      	    9325	    118144 ns/op	  176944 B/op	     124 allocs/op
-BenchmarkExchangeAuction/bids=100-12      	   10148	    121348 ns/op	  176944 B/op	     124 allocs/op
-BenchmarkExchangeAuction/bids=100-12      	    9813	    132613 ns/op	  176944 B/op	     124 allocs/op
-BenchmarkExchangeAuctionThroughput-12     	   32410	     36295 ns/op	     27552 auctions/sec	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuctionThroughput-12     	   32156	     37751 ns/op	     26490 auctions/sec	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuctionThroughput-12     	   28308	     37041 ns/op	     26997 auctions/sec	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuctionThroughput-12     	   29580	     40374 ns/op	     24769 auctions/sec	   43265 B/op	      45 allocs/op
-BenchmarkExchangeAuctionThroughput-12     	   32942	     39799 ns/op	     25126 auctions/sec	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuctionThroughput-12     	   28596	     41073 ns/op	     24347 auctions/sec	   43265 B/op	      45 allocs/op
-BenchmarkExchangeAuctionSecondPrice-12    	   30769	     40277 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuctionSecondPrice-12    	   40938	     42605 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuctionSecondPrice-12    	   37279	     34616 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuctionSecondPrice-12    	   42160	     32773 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuctionSecondPrice-12    	   38474	     34206 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkExchangeAuctionSecondPrice-12    	   34977	     34757 ns/op	   43264 B/op	      45 allocs/op
-BenchmarkDSPBidPath/campaigns=10-12 	  946647	      1376 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=10-12 	 1000000	      1494 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=10-12 	  927535	      1391 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=10-12 	  850358	      1633 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=10-12 	  766569	      1387 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=10-12 	  996289	      1491 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=50-12 	  147315	      8231 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=50-12 	  231349	     10024 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=50-12 	  136234	      8286 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=50-12 	  191286	      6849 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=50-12 	  139629	      9716 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=50-12 	  195282	      5761 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=200-12         	   53764	     23847 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=200-12         	   49353	     21681 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=200-12         	   63646	     24349 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=200-12         	   46182	     26362 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=200-12         	   45652	     22571 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPath/campaigns=200-12         	   44212	     23043 ns/op	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPathThroughput-12             	  310410	      5686 ns/op	    175877 bidreqs/sec	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPathThroughput-12             	  240669	      5488 ns/op	    182210 bidreqs/sec	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPathThroughput-12             	  239674	      5892 ns/op	    169720 bidreqs/sec	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPathThroughput-12             	  279667	      6006 ns/op	    166491 bidreqs/sec	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPathThroughput-12             	  166472	      7770 ns/op	    128692 bidreqs/sec	       0 B/op	       0 allocs/op
-BenchmarkDSPBidPathThroughput-12             	  179413	      7609 ns/op	    131430 bidreqs/sec	       0 B/op	       0 allocs/op
+BenchmarkExchangeAuction/bids=2-12        	  993812	      1345 ns/op	    2696 B/op	      10 allocs/op
+BenchmarkExchangeAuction/bids=2-12        	  851695	      1404 ns/op	    2696 B/op	      10 allocs/op
+BenchmarkExchangeAuction/bids=2-12        	  933432	      1200 ns/op	    2696 B/op	      10 allocs/op
+BenchmarkExchangeAuction/bids=2-12        	  910203	      1519 ns/op	    2696 B/op	      10 allocs/op
+BenchmarkExchangeAuction/bids=2-12        	  767619	      1315 ns/op	    2696 B/op	      10 allocs/op
+BenchmarkExchangeAuction/bids=2-12        	  999822	      1164 ns/op	    2696 B/op	      10 allocs/op
+BenchmarkExchangeAuction/bids=5-12        	  390355	      3125 ns/op	    9720 B/op	      17 allocs/op
+BenchmarkExchangeAuction/bids=5-12        	  356594	      3052 ns/op	    9720 B/op	      17 allocs/op
+BenchmarkExchangeAuction/bids=5-12        	  383356	      3055 ns/op	    9720 B/op	      17 allocs/op
+BenchmarkExchangeAuction/bids=5-12        	  392277	      3061 ns/op	    9720 B/op	      17 allocs/op
+BenchmarkExchangeAuction/bids=5-12        	  393110	      3022 ns/op	    9720 B/op	      17 allocs/op
+BenchmarkExchangeAuction/bids=5-12        	  398671	      3107 ns/op	    9720 B/op	      17 allocs/op
+BenchmarkExchangeAuction/bids=25-12       	   63207	     19157 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuction/bids=25-12       	   62707	     19161 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuction/bids=25-12       	   57949	     19021 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuction/bids=25-12       	   63074	     19106 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuction/bids=25-12       	   62410	     19155 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuction/bids=25-12       	   61116	     19139 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuction/bids=100-12      	   13744	     87250 ns/op	  222992 B/op	     124 allocs/op
+BenchmarkExchangeAuction/bids=100-12      	   13268	     87883 ns/op	  222992 B/op	     124 allocs/op
+BenchmarkExchangeAuction/bids=100-12      	   13549	     87793 ns/op	  222992 B/op	     124 allocs/op
+BenchmarkExchangeAuction/bids=100-12      	   13584	     87891 ns/op	  222992 B/op	     124 allocs/op
+BenchmarkExchangeAuction/bids=100-12      	   13546	     88217 ns/op	  222992 B/op	     124 allocs/op
+BenchmarkExchangeAuction/bids=100-12      	   13275	     88208 ns/op	  222992 B/op	     124 allocs/op
+BenchmarkExchangeAuctionThroughput-12     	   35138	     29584 ns/op	     33802 auctions/sec	   52833 B/op	      45 allocs/op
+BenchmarkExchangeAuctionThroughput-12     	   38853	     32481 ns/op	     30788 auctions/sec	   52833 B/op	      45 allocs/op
+BenchmarkExchangeAuctionThroughput-12     	   36961	     35078 ns/op	     28508 auctions/sec	   52833 B/op	      45 allocs/op
+BenchmarkExchangeAuctionThroughput-12     	   36546	     34617 ns/op	     28888 auctions/sec	   52833 B/op	      45 allocs/op
+BenchmarkExchangeAuctionThroughput-12     	   35653	     31692 ns/op	     31554 auctions/sec	   52833 B/op	      45 allocs/op
+BenchmarkExchangeAuctionThroughput-12     	   39354	     32681 ns/op	     30599 auctions/sec	   52833 B/op	      45 allocs/op
+BenchmarkExchangeAuctionProfiles/display-open-12         	   52615	     21759 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionProfiles/display-open-12         	   60315	     19367 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionProfiles/display-open-12         	   59902	     20038 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionProfiles/display-open-12         	   62022	     21024 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionProfiles/display-open-12         	   54919	     20124 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionProfiles/display-open-12         	   62330	     19642 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionProfiles/retail-grid-12          	   56834	     22514 ns/op	   70624 B/op	      53 allocs/op
+BenchmarkExchangeAuctionProfiles/retail-grid-12          	   44085	     24094 ns/op	   70624 B/op	      53 allocs/op
+BenchmarkExchangeAuctionProfiles/retail-grid-12          	   54334	     27308 ns/op	   70624 B/op	      53 allocs/op
+BenchmarkExchangeAuctionProfiles/retail-grid-12          	   55226	     25689 ns/op	   70624 B/op	      53 allocs/op
+BenchmarkExchangeAuctionProfiles/retail-grid-12          	   56016	     22915 ns/op	   70624 B/op	      53 allocs/op
+BenchmarkExchangeAuctionProfiles/retail-grid-12          	   55550	     21713 ns/op	   70624 B/op	      53 allocs/op
+BenchmarkExchangeAuctionSecondPrice-12                   	   61774	     20671 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionSecondPrice-12                   	   58528	     20488 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionSecondPrice-12                   	   58400	     19960 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionSecondPrice-12                   	   56257	     20672 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionSecondPrice-12                   	   61579	     20158 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkExchangeAuctionSecondPrice-12                   	   52525	     21921 ns/op	   52832 B/op	      45 allocs/op
+BenchmarkDSPBidPath/campaigns=10-12 	 1371421	       850.6 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=10-12 	 1418503	       837.2 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=10-12 	 1412220	       837.7 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=10-12 	 1396807	       838.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=10-12 	 1423820	       837.4 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=10-12 	 1430240	       827.5 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=50-12 	  274741	      4129 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=50-12 	  275348	      4183 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=50-12 	  294826	      4096 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=50-12 	  299406	      4070 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=50-12 	  294679	      4075 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=50-12 	  283650	      4062 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=200-12         	   73995	     16541 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=200-12         	   73914	     16674 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=200-12         	   70633	     16432 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=200-12         	   73838	     16297 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=200-12         	   74076	     16763 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPath/campaigns=200-12         	   70791	     16880 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathThroughput-12             	  342393	      3657 ns/op	    273482 bidreqs/sec	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathThroughput-12             	  352641	      3826 ns/op	    261393 bidreqs/sec	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathThroughput-12             	  322867	      3713 ns/op	    269360 bidreqs/sec	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathThroughput-12             	  306364	      4157 ns/op	    240541 bidreqs/sec	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathThroughput-12             	  278598	      4433 ns/op	    225593 bidreqs/sec	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathThroughput-12             	  221521	      4565 ns/op	    219079 bidreqs/sec	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/broad-12         	   66675	     15396 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/broad-12         	   87080	     12789 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/broad-12         	   99426	     12331 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/broad-12         	   97988	     11742 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/broad-12         	  102328	     11699 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/broad-12         	  103198	     12022 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/video-12         	  124084	      9772 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/video-12         	  125520	      9710 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/video-12         	  126680	      9747 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/video-12         	  125059	      9753 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/video-12         	  124444	      9731 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/video-12         	  126076	      9676 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/dense-12         	   72914	     16940 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/dense-12         	   72814	     16498 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/dense-12         	   72548	     16528 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/dense-12         	   72577	     16627 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/dense-12         	   73069	     16592 ns/op	       0 B/op	       0 allocs/op
+BenchmarkDSPBidPathProfiles/dense-12         	   73282	     16518 ns/op	       0 B/op	       0 allocs/op
