@@ -34,4 +34,18 @@ func TestAudienceUploadWritesMembers(t *testing.T) {
 	if got := h.SegmentMemberCount(t, segID); got != 4 {
 		t.Errorf("after re-upload with one new user, members = %d, want 4", got)
 	}
+
+	// Metadata preservation (the Lumière visibility-flip incident,
+	// 2026-10-05): a re-upload that does NOT assert visibility must keep the
+	// segment's existing choice — an advertiser's deliberate dsp_private can
+	// only change when a writer explicitly says so, never via a default
+	// riding an unrelated re-touch.
+	_ = h.UploadAudience(t, w.AdvAcc.ID, "e2e-crm-list", "", []string{"crm-u5"})
+	var vis string
+	if err := h.DB.QueryRow(`SELECT visibility FROM audience_segments WHERE id = $1::uuid`, segID).Scan(&vis); err != nil {
+		t.Fatalf("read visibility: %v", err)
+	}
+	if vis != "dsp_private" {
+		t.Errorf("visibility after metadata-less re-upload = %q, want dsp_private (preserved)", vis)
+	}
 }

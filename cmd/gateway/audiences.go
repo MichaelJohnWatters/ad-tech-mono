@@ -331,17 +331,16 @@ func (deps audienceDeps) handleUpload(w http.ResponseWriter, r *http.Request, cl
 		http.Error(w, `{"error":"no user ids in upload"}`, http.StatusBadRequest)
 		return
 	}
-	if req.Type == "" {
-		req.Type = "first_party"
-	}
-	if !isValidSegmentType(req.Type) {
+	// Empty type/visibility means "caller didn't say" and flows through as ""
+	// so the store PRESERVES an existing segment's values on re-upload (new
+	// segments default first_party / dsp_private at insert — see
+	// audiencepg.UpsertSegment and the Lumière visibility-flip incident).
+	// Only validate what was explicitly asserted.
+	if req.Type != "" && !isValidSegmentType(req.Type) {
 		http.Error(w, `{"error":"invalid type"}`, http.StatusBadRequest)
 		return
 	}
-	if req.Visibility == "" {
-		req.Visibility = "dsp_private"
-	}
-	if req.Visibility != "public" && req.Visibility != "dsp_private" {
+	if req.Visibility != "" && req.Visibility != "public" && req.Visibility != "dsp_private" {
 		http.Error(w, `{"error":"visibility must be public or dsp_private"}`, http.StatusBadRequest)
 		return
 	}
