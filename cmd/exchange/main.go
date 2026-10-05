@@ -788,7 +788,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 					// OpenRTB §4.4: the exchange substitutes the auction macros
 					// into the winner's markup at win time — with the CLEARING
 					// price (post-shading), never the raw bid.
-					AdM:      expandAuctionMacros(winnerBid.AdM, clearingPrice, traceID, "USD"),
+					AdM:      openrtb.ExpandAuctionMacros(winnerBid.AdM, clearingPrice, traceID, "USD"),
 					Protocol: winnerBid.Protocol,
 					ADomain:  adomain,
 					BidModel: winnerBid.BidModel,
@@ -833,7 +833,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 						MediaURL: wb.MediaURL,
 						// §4.4 substitution per slot, with THAT slot's clearing
 						// price and its per-surface sub-trace as the auction id.
-						AdM:      expandAuctionMacros(wb.AdM, wr.ClearingPrice, surfaceTrace(traceID, wr.Position), "USD"),
+						AdM:      openrtb.ExpandAuctionMacros(wb.AdM, wr.ClearingPrice, surfaceTrace(traceID, wr.Position), "USD"),
 						Protocol: wb.Protocol,
 						ADomain:  wadomain,
 						BidModel: wb.BidModel,

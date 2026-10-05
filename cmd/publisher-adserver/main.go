@@ -743,6 +743,13 @@ func (d *serveDeps) writePrebidWinner(ctx context.Context, r *http.Request, w ht
 	clickURL := adserving.BuildClickURL(macroCtx)
 	viewabilityURL := adserving.BuildViewabilityURL(macroCtx)
 
+	// OpenRTB §4.4: this fan-out BYPASSES the exchange (direct Prebid
+	// Server calls), so the win-time auction-macro substitution has to
+	// happen HERE — an external bidder's adm carrying ${AUCTION_PRICE}
+	// would otherwise serve with the literal macro. First-price on this
+	// path: the clearing price is the winning bid.
+	buyerHTML := openrtb.ExpandAuctionMacros(best.HTML, best.Price, traceID, defaultStr2(best.Currency, "USD"))
+
 	// Wrap the bid adm with our beacons. Outer div so script-shaped
 	// or iframe-shaped admm still render normally; our beacons sit
 	// outside the bid's own DOM scope so they aren't disturbed by
@@ -755,7 +762,7 @@ func (d *serveDeps) writePrebidWinner(ctx context.Context, r *http.Request, w ht
 	// impression is recorded but the view never is — the exact "zero data
 	// slippage" hole this path had.
 	wrappedHTML := `<div data-prebid-wrapper="1" style="display:block;width:100%;height:100%;">` +
-		best.HTML +
+		buyerHTML +
 		`<img src="` + impressionURL + `" width="1" height="1" style="display:none;" alt="" />` +
 		prebidViewabilityBeacon(viewabilityURL) +
 		`</div>`
