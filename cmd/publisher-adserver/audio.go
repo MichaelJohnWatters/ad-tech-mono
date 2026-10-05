@@ -152,8 +152,10 @@ func fetchAudioWinner(ctx context.Context, sspURL, placementID, traceID string, 
 func buildAudioVASTSpec(winner *sspVideoWinner, macroCtx adserving.MacroContext) vast.LinearSpec {
 	impURL := adserving.BuildImpressionURL(macroCtx)
 	clickURL := adserving.BuildClickURL(macroCtx)
+	// Bracket macros (cb/ts/pos + ec on error) ride unsigned for the player
+	// to substitute, same as the video beacons — see AppendClientMacroParams.
 	beacon := func(ev string) string {
-		return adserving.BuildAudioEventURL(macroCtx, ev)
+		return adserving.AppendClientMacroParams(adserving.BuildAudioEventURL(macroCtx, ev), ev)
 	}
 
 	durationSec := winner.DurationSeconds

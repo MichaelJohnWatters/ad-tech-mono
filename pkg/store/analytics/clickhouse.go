@@ -183,7 +183,7 @@ func (c *ClickHouse) createTables() error {
 		`CREATE TABLE IF NOT EXISTS media_events (
 			trace_id String, channel String, event_type String, position_ms Int64,
 			campaign_id String, creative_id String, placement_id String,
-			publisher_id String, account_id String,
+			publisher_id String, account_id String, error_code Int32 DEFAULT 0,
 			schema_version Int32 DEFAULT 1, timestamp DateTime64(3)
 		) ENGINE = MergeTree ORDER BY timestamp`,
 		`CREATE TABLE IF NOT EXISTS serve_no_fills (
@@ -344,6 +344,11 @@ func (c *ClickHouse) createTables() error {
 		`ALTER TABLE media_events ADD COLUMN IF NOT EXISTS placement_id String AFTER creative_id`,
 		`ALTER TABLE media_events ADD COLUMN IF NOT EXISTS publisher_id String AFTER placement_id`,
 		`ALTER TABLE media_events ADD COLUMN IF NOT EXISTS account_id String AFTER publisher_id`,
+		// VAST error code on event_type=error rows (player-substituted
+		// [ERRORCODE]; 900 = unsubstituted macro). AFTER account_id, chained
+		// with the attribution block above so upgraded tables match a fresh
+		// CREATE. Old rows read as 0 = no code.
+		`ALTER TABLE media_events ADD COLUMN IF NOT EXISTS error_code Int32 DEFAULT 0 AFTER account_id`,
 	} {
 		if _, err := c.db.Exec(ddl); err != nil {
 			c.log.Warn("clickhouse: could not add additive column", "ddl", ddl, "error", err)
@@ -485,11 +490,11 @@ func (c *ClickHouse) InsertMediaEvent(ctx context.Context, e *MediaEvent) error 
 	return c.exec(ctx, "media_event",
 		`INSERT INTO media_events (trace_id, channel, event_type, position_ms,
 			campaign_id, creative_id, placement_id, publisher_id, account_id,
-			schema_version, timestamp)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+			error_code, schema_version, timestamp)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		e.TraceID, e.Channel, e.EventType, e.PositionMs,
 		e.CampaignID, e.CreativeID, e.PlacementID, e.PublisherID, e.AccountID,
-		int32(1), tsv)
+		e.ErrorCode, int32(1), tsv)
 }
 
 func (c *ClickHouse) InsertBatch(ctx context.Context, events []Event) error {

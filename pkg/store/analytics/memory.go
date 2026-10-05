@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -112,7 +113,10 @@ type MediaEvent struct {
 	PlacementID string
 	PublisherID string
 	AccountID   string // advertiser account — tenant scope, same as impressions
-	Timestamp   time.Time
+	// ErrorCode is the VAST 4.2 error code on event_type=error rows (player-
+	// substituted [ERRORCODE]; 900 = unsubstituted macro, 0 = none/invalid).
+	ErrorCode int32
+	Timestamp time.Time
 }
 
 // BudgetDepletion records the moment a DSP detected a campaign had
@@ -386,8 +390,9 @@ func (s *MemoryStore) InsertMediaEvent(_ context.Context, e *MediaEvent) error {
 }
 
 // MediaEventsByTrace counts media events for a trace, optionally filtered
-// by channel ("video" / "audio") and event_type. Empty filters match all.
-func (s *MemoryStore) MediaEventsByTrace(traceID, channel, eventType string) int {
+// by channel ("video" / "audio"), event_type and error_code (numeric string,
+// so "0" explicitly filters no-code rows). Empty filters match all.
+func (s *MemoryStore) MediaEventsByTrace(traceID, channel, eventType, errorCode string) int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	n := 0
@@ -399,6 +404,9 @@ func (s *MemoryStore) MediaEventsByTrace(traceID, channel, eventType string) int
 			continue
 		}
 		if eventType != "" && e.EventType != eventType {
+			continue
+		}
+		if errorCode != "" && strconv.Itoa(int(e.ErrorCode)) != errorCode {
 			continue
 		}
 		n++

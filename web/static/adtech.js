@@ -24,7 +24,7 @@
 (function(window) {
     'use strict';
 
-    var SDK_VERSION = '2.0.0';
+    var SDK_VERSION = '2.1.0'; // 2.1.0: VAST bracket-macro substitution + <Error> firing in the player
     var COOKIE_NAME = 'adtech_uid';
     var COOKIE_DAYS = 90;
     // Server defaults to USA + UA-inferred device when these are blank;
@@ -406,6 +406,8 @@
             return;
         }
         var imp = (doc.querySelector('Impression') || {}).textContent;
+        var errorURIs = [];
+        doc.querySelectorAll('Error').forEach(function(e) { var u = (e.textContent || '').trim(); if (u) errorURIs.push(u); });
         var track = {};
         doc.querySelectorAll('Tracking').forEach(function(t) { track[t.getAttribute('event')] = (t.textContent || '').trim(); });
 
@@ -420,8 +422,35 @@
         el.innerHTML = '';
         el.appendChild(m);
 
+        // Player-side IAB bracket-macro substitution (VAST 4.2 §6). The server
+        // emits these tokens UNSIGNED after the sig; literal text replacement,
+        // per spec. [TIMESTAMP] is ISO 8601; playheads are HH:MM:SS.mmm.
+        function hms(sec) {
+            if (!isFinite(sec) || sec < 0) sec = 0;
+            var h = Math.floor(sec / 3600), mn = Math.floor(sec / 60) % 60, s = Math.floor(sec) % 60, ms = Math.round((sec % 1) * 1000);
+            function p2(n) { return (n < 10 ? '0' : '') + n; }
+            return p2(h) + ':' + p2(mn) + ':' + p2(s) + '.' + ('00' + ms).slice(-3);
+        }
+        function expandVastMacros(u, errorCode) {
+            if (!u || u.indexOf('[') === -1) return u;
+            var pos = encodeURIComponent(hms(m.currentTime || 0));
+            return u
+                .split('[CACHEBUSTING]').join(String(Math.floor(Math.random() * 1e8)))
+                .split('[TIMESTAMP]').join(encodeURIComponent(new Date().toISOString()))
+                .split('[ADPLAYHEAD]').join(pos)
+                .split('[CONTENTPLAYHEAD]').join(pos)
+                .split('[ERRORCODE]').join(String(errorCode || 0));
+        }
         var fired = {};
-        function beacon(u) { if (u) { (new Image()).src = u; } }
+        function beacon(u, errorCode) { if (u) { (new Image()).src = expandVastMacros(u, errorCode); } }
+        // VAST <Error>: fired on a fatal playback failure with the [ERRORCODE]
+        // macro substituted — 401 media not found, 405 problem displaying.
+        m.addEventListener('error', function() {
+            if (fired.err) return;
+            fired.err = 1;
+            var code = (m.error && m.error.code === MediaError.MEDIA_ERR_SRC_NOT_SUPPORTED) ? 401 : 405;
+            errorURIs.forEach(function(u) { beacon(u, code); });
+        });
         m.addEventListener('play', function() {
             if (!fired.imp) {
                 fired.imp = 1;

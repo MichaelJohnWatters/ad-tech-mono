@@ -275,8 +275,9 @@ func (h *Harness) ServeNoFillsByTrace(t *testing.T, traceID string) int {
 }
 
 // MediaEventsByTrace counts video/audio engagement records, optionally
-// filtered by channel ("video"/"audio") and event_type.
-func (h *Harness) MediaEventsByTrace(t *testing.T, traceID, channel, eventType string) int {
+// filtered by channel ("video"/"audio"), event_type and error_code (numeric
+// string, e.g. "405"; "" = no filter).
+func (h *Harness) MediaEventsByTrace(t *testing.T, traceID, channel, eventType, errorCode string) int {
 	t.Helper()
 	q := "?trace_id=" + traceID
 	if channel != "" {
@@ -284,6 +285,9 @@ func (h *Harness) MediaEventsByTrace(t *testing.T, traceID, channel, eventType s
 	}
 	if eventType != "" {
 		q += "&event_type=" + eventType
+	}
+	if errorCode != "" {
+		q += "&error_code=" + errorCode
 	}
 	body := h.getJSON(t, h.URLs.Reporting+routes.DebugMediaEvents+q)
 	var out struct {

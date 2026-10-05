@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/routes"
@@ -176,9 +178,18 @@ func maybeConvert(client *http.Client, impBeacon, traceparent string, p profile,
 	fireGet(client, adserving.SignURL(u.String(), adserving.DevConversionKey(nq.Get("advid"))), traceparent)
 }
 
+// playbackErrors64 counts simulated VAST playback errors (profile.ErrorRate
+// rolls) so the run summary can explain the missing completes.
+var playbackErrors64 int64
+
 // serveVAST mirrors the web video/audio tabs: GET the VAST, then fire the
-// Impression + quartile Tracking URLs the way a player does as it plays through
-// the ad, plus a stochastic click. These are the server's signed beacons.
+// Impression + quartile Tracking URLs the way a spec-compliant player does as
+// it plays through the ad, plus a stochastic click. These are the server's
+// signed beacons. Player-side IAB bracket macros ([CACHEBUSTING], [TIMESTAMP],
+// [ADPLAYHEAD], [ERRORCODE]) are substituted before every fire — the server
+// emits them as literal tokens outside the HMAC. A profile.ErrorRate roll
+// simulates a fatal playback failure: impression + start, then the <Error>
+// URIs with code 405 (problem displaying MediaFile), then stop.
 func serveVAST(client *http.Client, url, traceparent string, p profile, rng *rand.Rand) (bool, error) {
 	body, err := getBody(client, url, traceparent)
 	if err != nil {
@@ -195,9 +206,14 @@ func serveVAST(client *http.Client, url, traceparent string, p profile, rng *ran
 		if ad.InLine == nil {
 			continue
 		}
+		// Player-side macro substitution at the playhead position `pos`.
+		expand := func(uri string, v vast.URIMacroValues) string {
+			v.Rand = rng.Int63
+			return vast.ExpandURIMacros(strings.TrimSpace(uri), v)
+		}
 		var firstImp string
 		for _, imp := range ad.InLine.Impressions {
-			uri := strings.TrimSpace(imp.URI)
+			uri := expand(imp.URI, vast.URIMacroValues{})
 			if firstImp == "" {
 				firstImp = uri
 			}
@@ -207,21 +223,40 @@ func serveVAST(client *http.Client, url, traceparent string, p profile, rng *ran
 			if cr.Linear == nil {
 				continue
 			}
-			if cr.Linear.TrackingEvents != nil {
-				// Fire the standard playback progression, mirroring a real player.
+			adDur := time.Duration(cr.Linear.Duration)
+			fireEvent := func(ev string, pos time.Duration) {
+				if cr.Linear.TrackingEvents == nil {
+					return
+				}
 				for _, tr := range cr.Linear.TrackingEvents.Tracking {
-					switch tr.Event {
-					case "start", "firstQuartile", "midpoint", "thirdQuartile", "complete":
-						fireGet(client, strings.TrimSpace(tr.URI), traceparent)
+					if tr.Event == ev {
+						fireGet(client, expand(tr.URI, vast.URIMacroValues{AdPlayhead: pos, ContentPlayhead: pos}), traceparent)
 					}
 				}
 			}
+			if p.ErrorRate > 0 && rng.Float64() < p.ErrorRate {
+				// Fatal mid-start failure: a spec player fires what it saw
+				// (impression already sent + start), pings every <Error> URI
+				// with [ERRORCODE] substituted, and abandons the ad.
+				fireEvent("start", 0)
+				for _, e := range ad.InLine.Errors {
+					fireGet(client, expand(e.URI, vast.URIMacroValues{ErrorCode: 405}), traceparent)
+				}
+				atomic.AddInt64(&playbackErrors64, 1)
+				continue
+			}
+			// Standard playback progression at quartile playheads.
+			fireEvent("start", 0)
+			fireEvent("firstQuartile", adDur/4)
+			fireEvent("midpoint", adDur/2)
+			fireEvent("thirdQuartile", 3*adDur/4)
+			fireEvent("complete", adDur)
 			if cr.Linear.VideoClicks != nil && rng.Float64() < p.ClickRate {
 				if ct := cr.Linear.VideoClicks.ClickThrough; ct != nil {
-					fireGet(client, strings.TrimSpace(ct.URI), traceparent)
+					fireGet(client, expand(ct.URI, vast.URIMacroValues{AdPlayhead: adDur / 2}), traceparent)
 				}
 				for _, c := range cr.Linear.VideoClicks.ClickTracking {
-					fireGet(client, strings.TrimSpace(c.URI), traceparent)
+					fireGet(client, expand(c.URI, vast.URIMacroValues{AdPlayhead: adDur / 2}), traceparent)
 				}
 				maybeConvert(client, firstImp, traceparent, p, rng) // post-click conversion
 			}

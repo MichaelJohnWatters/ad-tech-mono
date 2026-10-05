@@ -108,7 +108,7 @@ func TestSSAIServerSideBeaconReachesReporting(t *testing.T) {
 	// The server-side beacon must reach reporting as a video media event on this
 	// ad's trace (tracker → NATS → reporting is async).
 	harness.WaitFor(t, 20*time.Second, "SSAI quartile beacon lands in reporting", func() bool {
-		return h.MediaEventsByTrace(t, adTrace, "video", "") >= 1
+		return h.MediaEventsByTrace(t, adTrace, "video", "", "") >= 1
 	})
 }
 

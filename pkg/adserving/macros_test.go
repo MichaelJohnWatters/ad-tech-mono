@@ -230,6 +230,62 @@ func TestBuildAudioEventURL(t *testing.T) {
 	}
 }
 
+// TestAppendClientMacroParams: the bracket-macro params ride as RAW literals
+// (not url-encoded — players substitute by text replacement) AFTER the sig,
+// and the original signature still validates once they're filtered back out
+// (the tracker's mediaSigParams contract). ec= appears only on error beacons.
+func TestAppendClientMacroParams(t *testing.T) {
+	ctx := MacroContext{
+		AuctionID: "trace-abc", CampaignID: "li-1", CreativeID: "cr-1",
+		PlacementID: "pl-1", PublisherID: "pub-1", AdvertiserID: "acct-1",
+		TrackerURL: "http://tracker:8083",
+	}
+	quartile := AppendClientMacroParams(BuildVideoEventURL(ctx, "firstQuartile"), "firstQuartile")
+	for _, want := range []string{"cb=[CACHEBUSTING]", "ts=[TIMESTAMP]", "pos=[ADPLAYHEAD]"} {
+		if !strings.Contains(quartile, want) {
+			t.Errorf("quartile URL missing raw literal %q: %s", want, quartile)
+		}
+	}
+	if strings.Contains(quartile, "ec=[ERRORCODE]") {
+		t.Errorf("non-error beacon must NOT carry ec=: %s", quartile)
+	}
+	if strings.Contains(quartile, "%5B") {
+		t.Errorf("bracket macros must be raw literals, not url-encoded: %s", quartile)
+	}
+
+	errURL := AppendClientMacroParams(BuildVideoEventURL(ctx, "error"), "error")
+	if !strings.Contains(errURL, "ec=[ERRORCODE]") {
+		t.Errorf("error beacon must carry ec=[ERRORCODE]: %s", errURL)
+	}
+
+	// The signature must still validate after the append, once the unsigned
+	// macro params are stripped — the tracker-side mediaSigParams contract.
+	u, err := url.Parse(errURL)
+	if err != nil {
+		t.Fatalf("parse appended URL: %v", err)
+	}
+	full := u.Query()
+	if ValidateSignature(u.Path, full, DefaultSigningKey) {
+		t.Errorf("validating the FULL query must fail — macro params are unsigned: %s", errURL)
+	}
+	filtered := url.Values{}
+	for k, v := range full {
+		switch k {
+		case "ec", "cb", "ts", "pos":
+		default:
+			filtered[k] = v
+		}
+	}
+	if !ValidateSignature(u.Path, filtered, DefaultSigningKey) {
+		t.Errorf("signature must validate once ec/cb/ts/pos are filtered: %s", errURL)
+	}
+	// And tampering a SIGNED param still invalidates under the filter.
+	filtered.Set("event", "complete")
+	if ValidateSignature(u.Path, filtered, DefaultSigningKey) {
+		t.Errorf("tampered event= must invalidate even with macro params filtered")
+	}
+}
+
 func TestSignedURLsCarryExpWhenTTLSet(t *testing.T) {
 	ctx := MacroContext{
 		AuctionID:   "trace-1",

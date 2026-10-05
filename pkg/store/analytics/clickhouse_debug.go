@@ -2,6 +2,7 @@ package analytics
 
 import (
 	"context"
+	"strconv"
 	"time"
 )
 
@@ -45,7 +46,7 @@ func (c *ClickHouse) ServeNoFillsByTrace(traceID string) int {
 	return c.count(`SELECT count() FROM serve_no_fills WHERE trace_id = ?`, traceID)
 }
 
-func (c *ClickHouse) MediaEventsByTrace(traceID, channel, eventType string) int {
+func (c *ClickHouse) MediaEventsByTrace(traceID, channel, eventType, errorCode string) int {
 	q := `SELECT count() FROM media_events WHERE trace_id = ?`
 	args := []any{traceID}
 	if channel != "" {
@@ -55,6 +56,15 @@ func (c *ClickHouse) MediaEventsByTrace(traceID, channel, eventType string) int 
 	if eventType != "" {
 		q += ` AND event_type = ?`
 		args = append(args, eventType)
+	}
+	// Numeric string ("405") so "0" explicitly filters no-code rows;
+	// empty = no filter. Parsed here rather than bound raw so a junk
+	// value can't type-error the ClickHouse query.
+	if errorCode != "" {
+		if code, err := strconv.Atoi(errorCode); err == nil {
+			q += ` AND error_code = ?`
+			args = append(args, int32(code))
+		}
 	}
 	return c.count(q, args...)
 }

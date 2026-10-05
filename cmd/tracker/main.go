@@ -38,6 +38,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/tracing"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/vast"
 )
 
 // 1x1 transparent GIF pixel (43 bytes)
@@ -712,7 +713,7 @@ func main() {
 			return
 		}
 		go publisher.publishVideo(context.WithoutCancel(ctx),
-			videoEventFromQuery(q, traceID, eventType, sigOK, time.Now()), reqLog)
+			videoEventFromQuery(q, traceID, eventType, sigOK, time.Now(), reqLog), reqLog)
 		w.WriteHeader(http.StatusNoContent)
 	})
 	mux.HandleFunc(routes.TrackerAudio, func(w http.ResponseWriter, r *http.Request) {
@@ -727,7 +728,7 @@ func main() {
 			return
 		}
 		go publisher.publishAudio(context.WithoutCancel(ctx),
-			audioEventFromQuery(q, traceID, eventType, sigOK, time.Now()), reqLog)
+			audioEventFromQuery(q, traceID, eventType, sigOK, time.Now(), reqLog), reqLog)
 		w.WriteHeader(http.StatusNoContent)
 	})
 
@@ -831,9 +832,13 @@ func channelOrDefault(ch string) string {
 // Real traffic is always signed, so it keeps full attribution. Read-only over
 // q — no lookups, no I/O (hot-path iron rule). Legacy beacons signed before
 // advid landed simply yield empty attribution fields.
-func videoEventFromQuery(q url.Values, traceID, eventType string, sigOK bool, now time.Time) events.VideoEvent {
+// The pos= and ec= params are player-substituted bracket macros (outside the
+// signature — see mediaSigParams). They are MEASUREMENT, not attribution, so
+// they're read regardless of sigOK — the same trust posture as dur/pct/area
+// on /v1/t/view. ec is only meaningful on event=error beacons.
+func videoEventFromQuery(q url.Values, traceID, eventType string, sigOK bool, now time.Time, reqLog *slog.Logger) events.VideoEvent {
 	attrib := attribGate(q, sigOK)
-	return events.VideoEvent{
+	e := events.VideoEvent{
 		TraceID:     traceID,
 		EventType:   eventType,
 		CampaignID:  attrib("cid"),
@@ -841,13 +846,18 @@ func videoEventFromQuery(q url.Values, traceID, eventType string, sigOK bool, no
 		PlacementID: attrib("pid"),
 		PublisherID: attrib("pubid"),
 		AccountID:   attrib("advid"),
+		PositionMs:  parsePlayhead(q.Get("pos")),
 		Timestamp:   now,
 	}
+	if eventType == "error" {
+		e.ErrorCode = parseErrorCode(q.Get("ec"), reqLog)
+	}
+	return e
 }
 
-func audioEventFromQuery(q url.Values, traceID, eventType string, sigOK bool, now time.Time) events.AudioEvent {
+func audioEventFromQuery(q url.Values, traceID, eventType string, sigOK bool, now time.Time, reqLog *slog.Logger) events.AudioEvent {
 	attrib := attribGate(q, sigOK)
-	return events.AudioEvent{
+	e := events.AudioEvent{
 		TraceID:     traceID,
 		EventType:   eventType,
 		CampaignID:  attrib("cid"),
@@ -855,8 +865,13 @@ func audioEventFromQuery(q url.Values, traceID, eventType string, sigOK bool, no
 		PlacementID: attrib("pid"),
 		PublisherID: attrib("pubid"),
 		AccountID:   attrib("advid"),
+		PositionMs:  parsePlayhead(q.Get("pos")),
 		Timestamp:   now,
 	}
+	if eventType == "error" {
+		e.ErrorCode = parseErrorCode(q.Get("ec"), reqLog)
+	}
+	return e
 }
 
 // attribGate returns a q.Get that yields "" for every key when the beacon's
@@ -1038,6 +1053,63 @@ func viewSigParams(q url.Values) url.Values {
 		}
 	}
 	return out
+}
+
+// mediaSigParams is the /v1/t/video + /v1/t/audio analogue of viewSigParams:
+// the IAB bracket-macro params (ec=[ERRORCODE], cb=[CACHEBUSTING],
+// ts=[TIMESTAMP], pos=[ADPLAYHEAD]) are appended AFTER the URL is signed
+// (adserving.AppendClientMacroParams) and substituted by the player, so they
+// were never part of the signed message. The filter list is EXACTLY these
+// four — event, tid and every attribution param stay inside the HMAC; adding
+// anything else here silently weakens the signature.
+func mediaSigParams(q url.Values) url.Values {
+	if !q.Has("ec") && !q.Has("cb") && !q.Has("ts") && !q.Has("pos") {
+		return q
+	}
+	out := make(url.Values, len(q))
+	for k, v := range q {
+		switch k {
+		case "ec", "cb", "ts", "pos":
+			// player-substituted bracket macros, appended post-signing
+		default:
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// parseErrorCode interprets the ec= param on an event=error media beacon.
+// Empty → 0 (no code sent). The literal "[ERRORCODE]" token → 900: per
+// VAST 4.2 a player that can't substitute macros leaves them in place and
+// the server records "undefined error". A valid enumerated code → itself.
+// Anything else → 0 (never store attacker-chosen junk as a code).
+func parseErrorCode(raw string, reqLog *slog.Logger) int {
+	switch {
+	case raw == "":
+		return 0
+	case raw == "[ERRORCODE]":
+		return vast.ErrorUndefined
+	}
+	code, err := strconv.Atoi(raw)
+	if err != nil || !vast.IsValidErrorCode(code) {
+		reqLog.Warn("invalid vast error code", "ec", raw)
+		return 0
+	}
+	return code
+}
+
+// parsePlayhead parses the pos= param (player-substituted [ADPLAYHEAD],
+// HH:MM:SS.mmm) into milliseconds. The literal macro, garbage, or an
+// absent param all yield 0 — position is measurement, never attribution.
+func parsePlayhead(raw string) int64 {
+	if raw == "" || strings.ContainsRune(raw, '[') {
+		return 0
+	}
+	var d vast.Duration
+	if err := d.UnmarshalText([]byte(raw)); err != nil {
+		return 0
+	}
+	return time.Duration(d).Milliseconds()
 }
 
 func isExpired(q url.Values, now time.Time) bool {

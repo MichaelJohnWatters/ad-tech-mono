@@ -36,7 +36,7 @@ func TestVideoEventFromQuery_StampsAttribution(t *testing.T) {
 	q := u.Query()
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 
-	e := videoEventFromQuery(q, q.Get("tid"), q.Get("event"), true, now)
+	e := videoEventFromQuery(q, q.Get("tid"), q.Get("event"), true, now, nopLog())
 	if e.TraceID != "trace-media-1" || e.EventType != "firstQuartile" {
 		t.Errorf("trace/event = %q/%q, want trace-media-1/firstQuartile", e.TraceID, e.EventType)
 	}
@@ -61,7 +61,7 @@ func TestAudioEventFromQuery_StampsAttribution(t *testing.T) {
 	}
 	q := u.Query()
 
-	e := audioEventFromQuery(q, q.Get("tid"), q.Get("event"), true, time.Now())
+	e := audioEventFromQuery(q, q.Get("tid"), q.Get("event"), true, time.Now(), nopLog())
 	if e.TraceID != "trace-media-1" || e.EventType != "complete" {
 		t.Errorf("trace/event = %q/%q, want trace-media-1/complete", e.TraceID, e.EventType)
 	}
@@ -77,7 +77,7 @@ func TestAudioEventFromQuery_StampsAttribution(t *testing.T) {
 // attribution — additive rollout, old signed URLs keep working.
 func TestMediaEventFromQuery_LegacyBeaconEmptyAttribution(t *testing.T) {
 	q := url.Values{"tid": {"trace-legacy"}, "event": {"start"}}
-	e := videoEventFromQuery(q, "trace-legacy", "start", true, time.Now())
+	e := videoEventFromQuery(q, "trace-legacy", "start", true, time.Now(), nopLog())
 	if e.TraceID != "trace-legacy" || e.EventType != "start" {
 		t.Errorf("trace/event = %q/%q, want trace-legacy/start", e.TraceID, e.EventType)
 	}
@@ -97,7 +97,7 @@ func TestMediaEventFromQuery_UnverifiedSigBlanksAttribution(t *testing.T) {
 		"cid": {"victim-campaign"}, "crid": {"victim-creative"},
 		"pid": {"victim-placement"}, "pubid": {"victim-pub"}, "advid": {"victim-acct"},
 	}
-	e := videoEventFromQuery(q, "trace-forged", "complete", false, time.Now())
+	e := videoEventFromQuery(q, "trace-forged", "complete", false, time.Now(), nopLog())
 	if e.TraceID != "trace-forged" || e.EventType != "complete" {
 		t.Errorf("trace/event = %q/%q, want trace-forged/complete", e.TraceID, e.EventType)
 	}
@@ -105,7 +105,7 @@ func TestMediaEventFromQuery_UnverifiedSigBlanksAttribution(t *testing.T) {
 		t.Errorf("unverified beacon must yield empty attribution, got cid=%q acct=%q pub=%q",
 			e.CampaignID, e.AccountID, e.PublisherID)
 	}
-	a := audioEventFromQuery(q, "trace-forged", "complete", false, time.Now())
+	a := audioEventFromQuery(q, "trace-forged", "complete", false, time.Now(), nopLog())
 	if a.CampaignID != "" || a.AccountID != "" {
 		t.Errorf("audio: unverified beacon must yield empty attribution, got cid=%q acct=%q", a.CampaignID, a.AccountID)
 	}
