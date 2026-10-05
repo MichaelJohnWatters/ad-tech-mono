@@ -196,6 +196,10 @@ const (
 	// GET /v1/api/audiences/check?user_id=H → {segments: [names], graph_known}
 	// — consults ONLY the caller's own segments.
 	APIAudienceCheck = apiPrefix + "/api/audiences/check"
+	// APIAudienceSync reports the account's serving-cache freshness:
+	// GET → {pending: N} — membership changes still queued for the Redis
+	// writer (0 = every upload/delete is live in serving).
+	APIAudienceSync = apiPrefix + "/api/audiences/sync"
 	// APIAudiencePGPKey serves the platform's PGP PUBLIC key (ADR 0008) so
 	// providers can encrypt audience files to it before upload: GET returns
 	// {public_key, fingerprint}. The key is public, but the endpoint sits behind

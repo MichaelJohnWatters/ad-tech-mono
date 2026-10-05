@@ -158,6 +158,22 @@ LIMIT $3`
 	return out, err
 }
 
+// PendingSync returns how many of the account's membership changes are still
+// queued for the serving-cache writer (the audience_membership_changelog
+// outbox the pipeline drains to Redis within seconds). 0 = every upload/
+// delete is live in serving; >0 = syncing. Per-segment Redis cardinality is
+// NOT feasible cheaply — the cache keys are per-USER sets — so this queue
+// depth is the honest, O(1) freshness signal.
+func (s *Store) PendingSync(ctx context.Context, accountID string) (int, error) {
+	n := 0
+	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		return tx.QueryRowContext(ctx,
+			`SELECT count(*) FROM audience_membership_changelog WHERE account_id = $1::uuid`,
+			accountID).Scan(&n)
+	})
+	return n, err
+}
+
 // CheckUser answers the portal's "test a hash" box for the OWNING account:
 // which of the account's segments contain this user id, and whether the
 // identity graph has ever observed it (= would a CRM row with this hash

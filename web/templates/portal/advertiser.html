@@ -141,7 +141,8 @@
     <section id="section-audiences" class="portal-section p-6 space-y-6 hidden">
       {{ template "section-intro" "Who you target — build and manage segments (first-party uploads, retargeting, lookalikes, and licensed third-party data)." }}
       {{ template "card-start" (dict "title" "Audience segments" "subtitle" "First-party & derived lists used for targeting and suppression") }}
-      <div class="flex justify-end mb-3">
+      <div class="flex items-center justify-end gap-3 mb-3">
+        <span id="audSync" class="text-xs text-gray-400" title="Membership changes still queued for the serving cache — uploads/deletes drain within seconds; 'in sync' means bidding sees exactly what this page shows"></span>
         {{ template "button" (dict "label" "+ Upload audience" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newAudience').classList.remove('hidden')") }}
       </div>
       {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Targeted by" "Taxonomy" "Fee" "Members" "Match rate" "Updated" "")) }}
@@ -2471,6 +2472,15 @@ async function loadAudiences() {
   loadRetargeting();
   // The audience list changed (or may have): refresh every picker's source.
   audOptsCache = null;
+  // Serving-sync chip: queued membership changes not yet in the serving
+  // cache. Advisory — failure leaves the chip blank.
+  fetchJSON('/v1/api/audiences/sync').then(s => {
+    const el = $('audSync');
+    if (!el) return;
+    el.innerHTML = (s && s.pending > 0)
+      ? `<span class="px-1.5 py-0.5 rounded bg-warning/15 text-warning">⏳ ${s.pending} change${s.pending === 1 ? '' : 's'} syncing to serving…</span>`
+      : '<span class="px-1.5 py-0.5 rounded bg-success/15 text-success">✓ serving cache in sync</span>';
+  }).catch(() => {});
   const tbody = tbodyOf('audiences');
   try {
     const list = await fetchJSON('/v1/api/audiences') || [];
