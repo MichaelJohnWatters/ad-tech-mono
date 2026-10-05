@@ -724,6 +724,134 @@
       <p class="mt-3 text-xs text-gray-400">Deliveries are signed with the subscription's secret (<code>X-Adtech-Signature: sha256=…</code> over the raw body). Success = HTTP 2xx; failures retry with backoff. Dedup on <code>X-Adtech-Delivery</code>.</p>
       {{ template "card-end" . }}
     </section>
+
+    <!-- ============ Campaign edit PAGE (#campaign/<id>) ============
+         Promoted from a max-w-md side drawer: budgets + flight + 17 targeting
+         fields + audience pickers + modifiers + caps + the creative picker
+         outgrew an overlay (fragile state, no deep link, no browser back).
+         Hash-routed via the router fallback hook; back = #campaigns. -->
+    <section id="section-campaign" class="portal-section p-6 space-y-6 hidden">
+      {{ template "card-start" (dict "title" "Edit campaign") }}
+      <div class="mb-4 flex items-center gap-3">
+        <a href="#campaigns" class="text-sm text-brand hover:underline whitespace-nowrap">← Campaigns</a>
+        <div id="ecName" class="text-sm font-medium"></div>
+      </div>
+  <form onsubmit="saveCampaign(event)" class="max-w-3xl">
+    <input type="hidden" id="ecID">
+    {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "ec_daily_budget" "type" "number") }}
+    {{ template "form-field" (dict "label" "Base bid (USD)" "name" "ec_base_bid" "type" "number") }}
+    {{ template "form-field" (dict "label" "Total budget (USD)" "name" "ec_total_budget" "type" "number") }}
+    <div class="grid grid-cols-2 gap-x-4">
+      {{ template "form-field" (dict "label" "Flight start" "name" "ec_start" "type" "date") }}
+      {{ template "form-field" (dict "label" "Flight end" "name" "ec_end" "type" "date") }}
+    </div>
+    <label class="block text-sm">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Bid model</span>
+      <select id="ec_bid_strategy" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+        <option value="cpm">CPM</option><option value="cpc">CPC</option><option value="cpa">CPA</option>
+        <option value="vcpm">vCPM</option><option value="cpcv">CPCV</option>
+      </select>
+    </label>
+    <label class="block text-sm">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Pacing</span>
+      <select id="ec_pacing" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+        <option value="even">Even</option><option value="asap">ASAP</option><option value="front_loaded">Front-loaded</option>
+      </select>
+    </label>
+    <label class="block text-sm">
+      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Bid shading</span>
+      <select id="ec_shading" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" title="Lower your bid toward the clearing price. Off = bid full value. More aggressive = more savings, fewer wins.">
+        <option value="disabled">Disabled — bid full value</option>
+        <option value="conservative">Conservative (~90% win)</option>
+        <option value="moderate">Moderate (~80% win)</option>
+        <option value="aggressive">Aggressive (~65% win)</option>
+      </select>
+    </label>
+    <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
+      <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Targeting</summary>
+      <div class="mt-3 grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Geo include" "name" "ec_geo_inc") }}
+        {{ template "form-field" (dict "label" "Geo exclude" "name" "ec_geo_exc") }}
+      </div>
+      {{ template "form-field" (dict "label" "Device include" "name" "ec_dev_inc") }}
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Domain include" "name" "ec_dom_inc") }}
+        {{ template "form-field" (dict "label" "Domain exclude" "name" "ec_dom_exc") }}
+      </div>
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Category include" "name" "ec_cat_inc") }}
+        {{ template "form-field" (dict "label" "Category exclude" "name" "ec_cat_exc") }}
+      </div>
+      {{ template "form-field" (dict "label" "OS include" "name" "ec_os_inc") }}
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Keyword include" "name" "ec_kw_inc") }}
+        {{ template "form-field" (dict "label" "Keyword exclude" "name" "ec_kw_exc") }}
+      </div>
+      {{ template "form-field" (dict "label" "Inventory type (site, app)" "name" "ec_inv_inc") }}
+      {{ template "form-field" (dict "label" "Channel include (display, video, audio, native, dooh, retail, ingame)" "name" "ec_chan_inc") }}
+      {{ template "form-field" (dict "label" "Product category (retail — the product's own IAB category)" "name" "ec_prodcat") }}
+      <!-- Audience pickers — same shape as the create form (see comment there). -->
+      <div class="grid grid-cols-2 gap-x-4">
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Segment include (audiences)</span>
+          <div id="ec_seg_inc_pick" class="mb-1 max-h-32 overflow-auto rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm space-y-1"></div>
+          <input id="ec_seg_inc" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs" placeholder="Advanced: raw ids/names, comma-separated" />
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Segment exclude</span>
+          <div id="ec_seg_exc_pick" class="mb-1 max-h-32 overflow-auto rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm space-y-1"></div>
+          <input id="ec_seg_exc" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs" placeholder="Advanced: raw ids/names, comma-separated" />
+        </label>
+      </div>
+      <div class="grid grid-cols-2 gap-x-4">
+        {{ template "form-field" (dict "label" "Device bid modifiers (device:±%)" "name" "ec_mod_dev") }}
+        {{ template "form-field" (dict "label" "Geo bid modifiers (country:±%)" "name" "ec_mod_geo") }}
+      </div>
+      <label class="block text-sm">
+        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Time-of-day bid modifiers (<code>START-END ±%</code> per line)</span>
+        <textarea id="ec_mod_tod" rows="2" class="w-full mb-1 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" placeholder="9-18 20"></textarea>
+      </label>
+      {{ template "form-field" (dict "label" "Campaign timezone (IANA)" "name" "ec_timezone") }}
+      <div class="grid grid-cols-3 gap-x-4">
+        {{ template "form-field" (dict "label" "Frequency cap (impressions)" "name" "ec_fc_limit" "type" "number") }}
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Cap window</span>
+          <select id="ec_fc_window" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="day">Day</option><option value="hour">Hour</option><option value="week">Week</option>
+          </select>
+        </label>
+        <label class="block text-sm">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Cap scope</span>
+          <select id="ec_fc_scope" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="user">Per user</option><option value="household">Per household</option>
+          </select>
+        </label>
+      </div>
+    </details>
+    <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
+      <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Creatives</summary>
+      <div class="mt-3">
+        <label class="block text-sm mb-3">
+          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Rotation</span>
+          <select id="ec_rotation" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
+            <option value="bandit">Bandit</option><option value="weighted">Weighted</option>
+            <option value="even">Even</option><option value="sequential">Sequential</option>
+          </select>
+        </label>
+        <p class="text-xs text-gray-600 dark:text-gray-300 mb-1">Attached creatives (checked serve; weight biases rotation). Only approved creatives are listed.</p>
+        <div id="ec_creatives" class="space-y-1 max-h-48 overflow-auto text-sm">
+          <p class="text-xs text-gray-400">loading…</p>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">Leave all unchecked to keep the current attachments.</p>
+      </div>
+    </details>
+    <div class="flex justify-end gap-2">
+      {{ template "button" (dict "label" "Back to campaigns" "variant" "ghost" "onclick" "location.hash='#campaigns'") }}
+      {{ template "button" (dict "label" "Save" "type" "submit") }}
+    </div>
+  </form>
+      {{ template "card-end" . }}
+    </section>
   </main>
 </div>
 
@@ -1207,124 +1335,6 @@
   </div>
 {{ template "modal-end" . }}
 
-<!-- Edit campaign drawer -->
-{{ template "drawer-start" (dict "id" "editCampaign" "title" "Edit campaign") }}
-  <form onsubmit="saveCampaign(event)">
-    <input type="hidden" id="ecID">
-    <div id="ecName" class="mb-3 text-sm font-medium"></div>
-    {{ template "form-field" (dict "label" "Daily budget (USD)" "name" "ec_daily_budget" "type" "number") }}
-    {{ template "form-field" (dict "label" "Base bid (USD)" "name" "ec_base_bid" "type" "number") }}
-    {{ template "form-field" (dict "label" "Total budget (USD)" "name" "ec_total_budget" "type" "number") }}
-    <div class="grid grid-cols-2 gap-x-4">
-      {{ template "form-field" (dict "label" "Flight start" "name" "ec_start" "type" "date") }}
-      {{ template "form-field" (dict "label" "Flight end" "name" "ec_end" "type" "date") }}
-    </div>
-    <label class="block text-sm">
-      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Bid model</span>
-      <select id="ec_bid_strategy" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
-        <option value="cpm">CPM</option><option value="cpc">CPC</option><option value="cpa">CPA</option>
-        <option value="vcpm">vCPM</option><option value="cpcv">CPCV</option>
-      </select>
-    </label>
-    <label class="block text-sm">
-      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Pacing</span>
-      <select id="ec_pacing" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
-        <option value="even">Even</option><option value="asap">ASAP</option><option value="front_loaded">Front-loaded</option>
-      </select>
-    </label>
-    <label class="block text-sm">
-      <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Bid shading</span>
-      <select id="ec_shading" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm" title="Lower your bid toward the clearing price. Off = bid full value. More aggressive = more savings, fewer wins.">
-        <option value="disabled">Disabled — bid full value</option>
-        <option value="conservative">Conservative (~90% win)</option>
-        <option value="moderate">Moderate (~80% win)</option>
-        <option value="aggressive">Aggressive (~65% win)</option>
-      </select>
-    </label>
-    <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
-      <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Targeting</summary>
-      <div class="mt-3 grid grid-cols-2 gap-x-4">
-        {{ template "form-field" (dict "label" "Geo include" "name" "ec_geo_inc") }}
-        {{ template "form-field" (dict "label" "Geo exclude" "name" "ec_geo_exc") }}
-      </div>
-      {{ template "form-field" (dict "label" "Device include" "name" "ec_dev_inc") }}
-      <div class="grid grid-cols-2 gap-x-4">
-        {{ template "form-field" (dict "label" "Domain include" "name" "ec_dom_inc") }}
-        {{ template "form-field" (dict "label" "Domain exclude" "name" "ec_dom_exc") }}
-      </div>
-      <div class="grid grid-cols-2 gap-x-4">
-        {{ template "form-field" (dict "label" "Category include" "name" "ec_cat_inc") }}
-        {{ template "form-field" (dict "label" "Category exclude" "name" "ec_cat_exc") }}
-      </div>
-      {{ template "form-field" (dict "label" "OS include" "name" "ec_os_inc") }}
-      <div class="grid grid-cols-2 gap-x-4">
-        {{ template "form-field" (dict "label" "Keyword include" "name" "ec_kw_inc") }}
-        {{ template "form-field" (dict "label" "Keyword exclude" "name" "ec_kw_exc") }}
-      </div>
-      {{ template "form-field" (dict "label" "Inventory type (site, app)" "name" "ec_inv_inc") }}
-      {{ template "form-field" (dict "label" "Channel include (display, video, audio, native, dooh, retail, ingame)" "name" "ec_chan_inc") }}
-      {{ template "form-field" (dict "label" "Product category (retail — the product's own IAB category)" "name" "ec_prodcat") }}
-      <!-- Audience pickers — same shape as the create form (see comment there). -->
-      <div class="grid grid-cols-2 gap-x-4">
-        <label class="block text-sm">
-          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Segment include (audiences)</span>
-          <div id="ec_seg_inc_pick" class="mb-1 max-h-32 overflow-auto rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm space-y-1"></div>
-          <input id="ec_seg_inc" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs" placeholder="Advanced: raw ids/names, comma-separated" />
-        </label>
-        <label class="block text-sm">
-          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Segment exclude</span>
-          <div id="ec_seg_exc_pick" class="mb-1 max-h-32 overflow-auto rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm space-y-1"></div>
-          <input id="ec_seg_exc" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1 text-xs" placeholder="Advanced: raw ids/names, comma-separated" />
-        </label>
-      </div>
-      <div class="grid grid-cols-2 gap-x-4">
-        {{ template "form-field" (dict "label" "Device bid modifiers (device:±%)" "name" "ec_mod_dev") }}
-        {{ template "form-field" (dict "label" "Geo bid modifiers (country:±%)" "name" "ec_mod_geo") }}
-      </div>
-      <label class="block text-sm">
-        <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Time-of-day bid modifiers (<code>START-END ±%</code> per line)</span>
-        <textarea id="ec_mod_tod" rows="2" class="w-full mb-1 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm font-mono" placeholder="9-18 20"></textarea>
-      </label>
-      {{ template "form-field" (dict "label" "Campaign timezone (IANA)" "name" "ec_timezone") }}
-      <div class="grid grid-cols-3 gap-x-4">
-        {{ template "form-field" (dict "label" "Frequency cap (impressions)" "name" "ec_fc_limit" "type" "number") }}
-        <label class="block text-sm">
-          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Cap window</span>
-          <select id="ec_fc_window" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
-            <option value="day">Day</option><option value="hour">Hour</option><option value="week">Week</option>
-          </select>
-        </label>
-        <label class="block text-sm">
-          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Cap scope</span>
-          <select id="ec_fc_scope" class="w-full mb-4 rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
-            <option value="user">Per user</option><option value="household">Per household</option>
-          </select>
-        </label>
-      </div>
-    </details>
-    <details class="mb-4 rounded-md border border-gray-200 dark:border-gray-800 px-3 py-2">
-      <summary class="cursor-pointer text-xs font-medium text-gray-600 dark:text-gray-300">Creatives</summary>
-      <div class="mt-3">
-        <label class="block text-sm mb-3">
-          <span class="block mb-1 text-xs font-medium text-gray-600 dark:text-gray-300">Rotation</span>
-          <select id="ec_rotation" class="w-full rounded-md border border-gray-300 dark:border-gray-700 bg-white dark:bg-surface-3 px-2 py-1.5 text-sm">
-            <option value="bandit">Bandit</option><option value="weighted">Weighted</option>
-            <option value="even">Even</option><option value="sequential">Sequential</option>
-          </select>
-        </label>
-        <p class="text-xs text-gray-600 dark:text-gray-300 mb-1">Attached creatives (checked serve; weight biases rotation). Only approved creatives are listed.</p>
-        <div id="ec_creatives" class="space-y-1 max-h-48 overflow-auto text-sm">
-          <p class="text-xs text-gray-400">loading…</p>
-        </div>
-        <p class="text-xs text-gray-400 mt-1">Leave all unchecked to keep the current attachments.</p>
-      </div>
-    </details>
-    <div class="flex justify-end gap-2">
-      {{ template "button" (dict "label" "Close" "variant" "ghost" "onclick" "document.getElementById('editCampaign').classList.add('hidden')") }}
-      {{ template "button" (dict "label" "Save" "type" "submit") }}
-    </div>
-  </form>
-{{ template "drawer-end" . }}
 
 {{ template "toast" . }}
 <script src="/static/theme.js"></script>
@@ -1353,7 +1363,15 @@ const fmtInt = (n) => Number(n || 0).toLocaleString();
 
 // ---- Section switching (portal-core initSectionRouter) ----
 const showSection = initSectionRouter({
-  sections: ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'products', 'marketplace', 'conversions', 'attribution', 'reports', 'shading', 'billing', 'support', 'team', 'webhooks'],
+  sections: ['dashboard', 'portfolio', 'campaigns', 'creatives', 'audiences', 'products', 'marketplace', 'conversions', 'attribution', 'reports', 'shading', 'billing', 'support', 'team', 'webhooks', 'campaign'],
+  // Parameterized route: #campaign/<id> isn't a static section name, so it
+  // lands in the router's fallback — we load the campaign page and claim the
+  // 'campaign' section. Anything else unknown still falls back to dashboard.
+  fallback: () => {
+    const h = location.hash.slice(1);
+    if (h.startsWith('campaign/')) { populateCampaignPage(h.slice('campaign/'.length)); return 'campaign'; }
+    return 'dashboard';
+  },
   loaders: {dashboard: () => loadDashboard(), portfolio: () => loadPortfolio(), campaigns: () => loadCampaigns(),
     creatives: () => loadCreatives(), audiences: () => loadAudiences(), products: () => loadProducts(), marketplace: () => loadMarketplace(), conversions: () => loadConversions(),
     attribution: () => loadARA(),
@@ -2030,10 +2048,12 @@ async function createCampaign(ev) {
   };
   for (const [k, v] of Object.entries(targeting)) if (v.length) body[k] = v;
   try {
-    await fetchJSON('/v1/api/campaigns', {method: 'POST', body: JSON.stringify(body)});
+    const created = await fetchJSON('/v1/api/campaigns', {method: 'POST', body: JSON.stringify(body)});
     $('newCampaign').classList.add('hidden');
     toast('Campaign created', 'success');
-    loadCampaigns();
+    await loadCampaigns();
+    // Land on the new campaign's page — finish targeting/creatives there.
+    if (created && created.id) location.hash = 'campaign/' + created.id;
   } catch (err) { toast('Create failed: ' + err.message, 'error'); }
 }
 
@@ -2048,9 +2068,23 @@ async function togglePause(id) {
   } catch (err) { toast('Update failed: ' + err.message, 'error'); }
 }
 
+// openEdit navigates to the campaign's own page (#campaign/<id>) — the
+// router's fallback hook does the loading, so deep links and browser back
+// work identically to a row click.
 function openEdit(id) {
-  const c = campaignsCache.find(x => x.ID === id);
-  if (!c) return;
+  const target = 'campaign/' + id;
+  if (location.hash.slice(1) === target) { populateCampaignPage(id); return; }
+  location.hash = target;
+}
+
+async function populateCampaignPage(id) {
+  let c = campaignsCache.find(x => x.ID === id);
+  if (!c) {
+    // Deep link / fresh load: the campaigns cache isn't warm yet.
+    try { await loadCampaigns(); } catch (e) {}
+    c = campaignsCache.find(x => x.ID === id);
+  }
+  if (!c) { toast('Campaign not found', 'error'); location.hash = '#campaigns'; return; }
   $('ecID').value = id;
   $('ecName').textContent = c.Name;
   $('ec_daily_budget').value = c.DailyBudget;
@@ -2087,7 +2121,6 @@ function openEdit(id) {
   $('ec_fc_scope').value = c.FreqCapScope || 'user';
   $('ec_rotation').value = c.CreativeRotation || 'bandit';
   renderCreativePicker(c);
-  $('editCampaign').classList.remove('hidden');
 }
 
 // renderCreativePicker fills the edit drawer's creative list: every approved
@@ -2169,9 +2202,9 @@ async function saveCampaign(ev) {
   if (creatives) body.creatives = creatives;
   try {
     await fetchJSON('/v1/api/campaigns/' + encodeURIComponent($('ecID').value), {method: 'PATCH', body: JSON.stringify(body)});
-    $('editCampaign').classList.add('hidden');
     toast('Campaign updated', 'success');
-    loadCampaigns();
+    await loadCampaigns();
+    location.hash = '#campaigns';
   } catch (err) { toast('Save failed: ' + err.message, 'error'); }
 }
 
