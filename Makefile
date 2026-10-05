@@ -279,6 +279,9 @@ demo-forward: ## SETUP/TOOLING ONLY (NOT needed to browse the demo — sites/por
 demo-setup: ## Interview-ready: seed + warm (prewarm/SSAI) + baseline traffic + VERIFY every ad format serves. Needs `make demo-forward` running.
 	bash scripts/demo-setup.sh
 
+test-portal: ## Browser smoke of the advertiser portal (chromedp): dead-onclick regression, audience upload-append, campaign page + pickers. Needs stack up + seeded.
+	go run ./cmd/portalsmoke
+
 demo-loadtest: ## Interview grand-finale: short (~4m) soak tuned for SPREAD (competitive bids + asap pacing + freq caps) so dashboards come alive. Tune RPS/DURATION/USER_POOL. Needs `make demo-forward`.
 	bash scripts/demo-loadtest.sh
 
