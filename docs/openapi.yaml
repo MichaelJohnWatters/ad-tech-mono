@@ -2173,6 +2173,17 @@ paths:
       responses:
         "200": { description: "{ segments: [names…], graph_known: bool }" }
         "400": { description: "user_id required (max 256 chars)" }
+  /v1/api/audiences/sync:
+    get:
+      tags: [Audiences]
+      summary: Serving-cache freshness — pending membership changes
+      description: >-
+        Tenant-scoped depth of the membership change-log outbox still queued
+        for the serving-cache writer. 0 = every upload/delete is live in
+        serving; >0 = syncing (drains within seconds under normal operation).
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200": { description: "{ pending: int }" }
   /v1/api/audiences/pgp-key:
     get:
       tags: [Audiences]

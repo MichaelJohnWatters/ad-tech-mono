@@ -652,6 +652,16 @@ func audienceInspectHandler(deps audienceDeps) http.HandlerFunc {
 			_ = json.NewEncoder(w).Encode(map[string]any{"members": members})
 			return
 		}
+		if r.URL.Path == routes.APIAudienceSync {
+			pending, err := store.PendingSync(r.Context(), accountID)
+			if err != nil {
+				log.Error("audience sync check failed", "error", err)
+				http.Error(w, `{"error":"lookup failed"}`, http.StatusInternalServerError)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]int{"pending": pending})
+			return
+		}
 		userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
 		if userID == "" || len(userID) > 256 {
 			http.Error(w, `{"error":"user_id required (max 256 chars)"}`, http.StatusBadRequest)
