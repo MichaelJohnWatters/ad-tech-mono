@@ -206,14 +206,17 @@ func main() {
 		return keys.PublisherAdServer.OmidVendor.Get(cfg),
 			keys.PublisherAdServer.OmidVerificationURL.Get(cfg)
 	}
-	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, secureBase, omidFn, stubFn, houseAdFn))
+	// Live kill switch for the standard bid.adm consumption path (parse the
+	// winner's VAST + inject platform trackers); off = legacy MediaURL build.
+	consumeAdMFn := func() bool { return keys.PublisherAdServer.ConsumeAdM.Get(cfg) }
+	mux.HandleFunc(routes.PublisherAdServeVAST, vastHandler(log, trackerURL, sspURL, secureBase, omidFn, stubFn, houseAdFn, consumeAdMFn))
 	// publisher_adserver.public_url is the browser-reachable origin the VMAP
 	// schedule tells the player to call back into for each break's VAST.
 	// Defaults to the gateway's local origin since every demo path runs through
 	// it. (Reused above as the display-passthrough rewrite base.)
 	mux.HandleFunc(routes.PublisherAdServeVMAP, vmapHandler(log, publicBase))
 	mux.HandleFunc(routes.PublisherAdServeNative, nativeHandler(log, trackerURL, sspURL, secureBase, stubFn, houseAdFn))
-	mux.HandleFunc(routes.PublisherAdServeAudio, audioHandler(log, trackerURL, sspURL, secureBase, stubFn, houseAdFn))
+	mux.HandleFunc(routes.PublisherAdServeAudio, audioHandler(log, trackerURL, sspURL, secureBase, stubFn, houseAdFn, consumeAdMFn))
 
 	handler := tracing.HTTPMiddleware(constants.ServicePublisherAdServer)(metrics.Wrap(middleware.CORS(mux)))
 	// WriteTimeout=15 s covers the worst-case /debug/cache/refresh

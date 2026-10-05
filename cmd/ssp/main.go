@@ -560,8 +560,13 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		bidReq.Imp[0].Video = buildVideoImp(p.VideoConfig)
 	case channel == "audio":
 		bidReq.Imp[0].Audio = &openrtb.Audio{
-			Mimes:       []string{"audio/mpeg", "audio/mp4"},
-			Protocols:   []int{1, 2}, // DAAST 1.0, DAAST 1.0 wrapper
+			Mimes: []string{"audio/mpeg", "audio/mp4"},
+			// AdCOM ids: 9/10 = DAAST 1.0 / wrapper (advertised for
+			// hypothetical third parties; retired as OUR emission format),
+			// 11/13 = VAST 4.1/4.2 — modern audio is VAST 4.x audio
+			// MediaFiles. The old [1,2] claimed VAST 1.0/2.0 by the
+			// standard table while meaning DAAST — fixed for interop.
+			Protocols:   []int{9, 10, 11, 13},
 			MinDuration: 10,
 			MaxDuration: 60,
 			Feed:        2, // podcast
@@ -1194,10 +1199,14 @@ func serveAdHandler(log *slog.Logger, placements *warm.Cache[postgres.PlacementR
 			}
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			json.NewEncoder(w).Encode(serveAdResponse{
-				TraceID:          ac.TraceID,
-				Channel:          ch,
-				Geo:              r.URL.Query().Get("geo"),
-				Device:           r.URL.Query().Get("device"),
+				TraceID: ac.TraceID,
+				Channel: ch,
+				Geo:     r.URL.Query().Get("geo"),
+				Device:  r.URL.Query().Get("device"),
+				// The winner's VAST-in-adm (OpenRTB §4.3), gated on the imp's
+				// advertised protocols — a mismatch drops adm (warn), the
+				// MediaURL fallback still serves, and the settled win stands.
+				AdM:              admForMediaServe(ac, winner, reqLog),
 				CreativeID:       winner.CrID,
 				CampaignID:       winner.CID,
 				PlacementID:      ac.Placement.ID,

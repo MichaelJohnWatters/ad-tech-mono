@@ -104,38 +104,30 @@ type ClickSpec struct {
 // inside trace explorers / Jaeger spans. Real players don't care
 // about whitespace either way.
 func BuildLinearAd(spec LinearSpec) ([]byte, error) {
-	doc := VAST{
-		XMLNSXSI: xsiNamespace,
-		XSILoc:   xsdLocation,
-		Version:  Version,
-		Ads:      []Ad{specToAd(spec)},
-	}
-	var buf bytes.Buffer
-	buf.WriteString(xml.Header)
-	enc := xml.NewEncoder(&buf)
-	enc.Indent("", "  ")
-	if err := enc.Encode(doc); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
+	return BuildDocument([]Ad{specToAd(spec)})
 }
 
 // BuildPod produces a VAST document with one Ad per spec, sequenced
 // in order — the standard shape for pre/mid/post-roll pods. Players
 // iterate ads by Sequence and play them back-to-back.
 func BuildPod(specs []LinearSpec) ([]byte, error) {
-	doc := VAST{
-		XMLNSXSI: xsiNamespace,
-		XSILoc:   xsdLocation,
-		Version:  Version,
-		Ads:      make([]Ad, 0, len(specs)),
-	}
+	ads := make([]Ad, 0, len(specs))
 	for i, s := range specs {
 		if s.Sequence == 0 {
 			s.Sequence = i + 1
 		}
-		doc.Ads = append(doc.Ads, specToAd(s))
+		ads = append(ads, specToAd(s))
 	}
+	return BuildDocument(ads)
+}
+
+// SpecToAd exposes the LinearSpec→Ad conversion so callers mixing
+// spec-built and parsed ads in one document (pod slots) share the shape.
+func SpecToAd(spec LinearSpec) Ad { return specToAd(spec) }
+
+// marshalDoc is the single marshal tail: xml header + 2-space indents
+// (human-inspectable in trace explorers; players ignore whitespace).
+func marshalDoc(doc VAST) ([]byte, error) {
 	var buf bytes.Buffer
 	buf.WriteString(xml.Header)
 	enc := xml.NewEncoder(&buf)
@@ -214,6 +206,10 @@ func specToAd(spec LinearSpec) Ad {
 		},
 	}
 }
+
+// AdVerificationsFor exposes the OMID <AdVerifications> builder for callers
+// that inject into a PARSED ad (the bid.adm path) rather than a LinearSpec.
+func AdVerificationsFor(vs []OMIDVerification) *AdVerifications { return buildAdVerifications(vs) }
 
 // buildAdVerifications turns the OMID verification specs into the VAST
 // <AdVerifications> element. Returns nil (element omitted) when there are none.

@@ -785,7 +785,11 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 					H:        winnerBid.Height,
 					Dur:      winnerBid.Duration,
 					MediaURL: winnerBid.MediaURL,
-					AdM:      winnerBid.AdM, // native markup — dropped before this fix, breaking native fill
+					// OpenRTB §4.4: the exchange substitutes the auction macros
+					// into the winner's markup at win time — with the CLEARING
+					// price (post-shading), never the raw bid.
+					AdM:      expandAuctionMacros(winnerBid.AdM, clearingPrice, traceID, "USD"),
+					Protocol: winnerBid.Protocol,
 					ADomain:  adomain,
 					BidModel: winnerBid.BidModel,
 					// Deal ID flows into the response so SSPs/tools see which
@@ -827,7 +831,10 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 						W:        wb.Width,
 						H:        wb.Height,
 						MediaURL: wb.MediaURL,
-						AdM:      wb.AdM,
+						// §4.4 substitution per slot, with THAT slot's clearing
+						// price and its per-surface sub-trace as the auction id.
+						AdM:      expandAuctionMacros(wb.AdM, wr.ClearingPrice, surfaceTrace(traceID, wr.Position), "USD"),
+						Protocol: wb.Protocol,
 						ADomain:  wadomain,
 						BidModel: wb.BidModel,
 						DealID:   wb.DealID,
@@ -1423,6 +1430,7 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 						Height:       b.H,
 						MediaURL:     b.MediaURL,
 						AdM:          b.AdM,
+						Protocol:     b.Protocol,
 						AdvertiserID: sb.Seat, // self-declared — display/deal-match only, NOT billing
 						// Trusted billable seat = which configured endpoint this bid
 						// came from (data-fee attribution can't ride the self-declared seat).

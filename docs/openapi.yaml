@@ -930,8 +930,15 @@ paths:
       summary: VAST 4.2 document for a video winner
       description: >
         Runs a video auction via the SSP (channel=video) and returns a VAST 4.2
-        document with signed trackers. Embeds OMID <AdVerifications> when
-        publisher_adserver.omid_verification_url is configured.
+        document with signed trackers. Standard path: the winner's bid.adm VAST
+        (OpenRTB §4.3, auction macros already substituted per §4.4) is parsed
+        and served with the platform's signed trackers injected alongside the
+        buyer's own; adm absent/unparseable/protocol-mismatched falls back to a
+        locally-built document from the MediaURL extension (kill switch:
+        publisher_adserver.consume_adm). Tracking/error URIs carry the unsigned
+        player-substituted IAB bracket macros (cb/ts/pos + ec on error). Embeds
+        OMID <AdVerifications> when publisher_adserver.omid_verification_url is
+        configured. ?pod=N returns a sequenced ad pod.
       parameters:
         - name: placement_id
           in: query

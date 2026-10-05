@@ -44,9 +44,74 @@ type sspVideoWinner struct {
 	DurationSeconds  int     `json:"duration_seconds"`
 	MediaURL         string  `json:"media_url"`
 	DealID           string  `json:"deal_id"`
-	// AdM carries native ad markup (OpenRTB Native response JSON) when
-	// channel=native; empty for video/audio. Consumed by native.go.
+	// AdM carries the winner's ad markup: OpenRTB Native response JSON on
+	// channel=native (consumed by native.go), VAST XML on video/audio
+	// (OpenRTB §4.3 — parsed + platform trackers injected by adFromWinner,
+	// with ${AUCTION_PRICE} already substituted by the exchange).
 	AdM string `json:"adm"`
+}
+
+// adFromWinner returns the VAST Ad to serve for a video/audio winner. The
+// standard path: the winner's bid.adm parses as VAST → serve THAT document's
+// ad with the platform's signed trackers injected alongside the buyer's own
+// (spec carries the exact tracker set the local build would have used).
+// Fallback: adm absent/unparseable/disabled → the legacy local build from
+// winner.MediaURL. ok=false when neither path can produce an ad.
+func adFromWinner(r *http.Request, winner *sspVideoWinner, spec vast.LinearSpec, consumeAdM bool, secureBase string, reqLog *slog.Logger) (vast.Ad, bool) {
+	if consumeAdM && winner.AdM != "" && vast.Sniff(winner.AdM) {
+		doc, err := vast.Parse([]byte(winner.AdM))
+		if err == nil && len(doc.Ads) > 0 && doc.Ads[0].InLine != nil {
+			doc.InjectLinearTrackers(spec.Trackers, spec.ErrorURLs, spec.Click)
+			ad := doc.Ads[0]
+			ad.Sequence = spec.Sequence
+			rehostPlatformMedia(r, &ad, secureBase)
+			if len(spec.Verifications) > 0 && ad.InLine.AdVerifications == nil {
+				ad.InLine.AdVerifications = vast.AdVerificationsFor(spec.Verifications)
+			}
+			return ad, true
+		}
+		reqLog.Warn("winner adm did not parse as VAST — falling back to MediaURL build",
+			"error", err, "crid", winner.CreativeID)
+	}
+	if winner.MediaURL == "" {
+		return vast.Ad{}, false
+	}
+	return vast.SpecToAd(spec), true
+}
+
+// rehostPlatformMedia re-hosts PLATFORM-LOCAL MediaFile URIs (localhost,
+// cluster service names) onto the secure base on an HTTPS ingress request —
+// the adm-path analogue of the MediaURL rewrite. A buyer's external CDN URL
+// (dotted public host) is never touched.
+func rehostPlatformMedia(r *http.Request, ad *vast.Ad, secureBase string) {
+	if ad.InLine == nil {
+		return
+	}
+	for c := range ad.InLine.Creatives.Creatives {
+		lin := ad.InLine.Creatives.Creatives[c].Linear
+		if lin == nil {
+			continue
+		}
+		for m := range lin.MediaFiles.MediaFiles {
+			mf := &lin.MediaFiles.MediaFiles[m]
+			if isPlatformLocalURL(mf.URI) {
+				mf.URI = rewriteHostIfSecure(r, strings.TrimSpace(mf.URI), secureBase)
+			}
+		}
+	}
+}
+
+// isPlatformLocalURL reports whether a media URL points at platform-local
+// infrastructure (localhost / docker bridge / an undotted cluster service
+// name like minio:9000) as opposed to an external CDN.
+func isPlatformLocalURL(raw string) bool {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return false
+	}
+	host := u.Hostname()
+	return host == "localhost" || host == "127.0.0.1" ||
+		host == "host.docker.internal" || !strings.Contains(host, ".")
 }
 
 // vastHandler serves a VAST 4.2 document built from a real auction
@@ -66,7 +131,7 @@ type sspVideoWinner struct {
 // On any failure (SSP unreachable, no bid, missing media URL) we fall
 // back to a static demo VAST so the simulator never sees a broken
 // player. The failure reason gets logged but the response stays valid.
-func vastHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, omidFn func() (vendor, scriptURL string), stubFn func() bool, houseAdFn houseAdLookup) http.HandlerFunc {
+func vastHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, omidFn func() (vendor, scriptURL string), stubFn func() bool, houseAdFn houseAdLookup, consumeAdMFn func() bool) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 		traceID := tracing.TraceIDFromContext(ctx)
@@ -91,7 +156,7 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, omidFn
 		// separation (no repeated advertiser within the pod). This is the
 		// defining CTV/long-form break shape.
 		if podSize := parsePodSize(r.URL.Query().Get("pod")); podSize > 1 {
-			if xmlBytes, n := buildPodVAST(ctx, sspURL, beaconBase, secureBase, r, placementID, r.URL.Query(), podSize, omidFn, reqLog); n > 0 {
+			if xmlBytes, n := buildPodVAST(ctx, sspURL, beaconBase, secureBase, r, placementID, r.URL.Query(), podSize, omidFn, consumeAdMFn(), reqLog); n > 0 {
 				reqLog.Info("video pod served", "requested", podSize, "filled", n)
 				adserving.SetOutcome(w, adserving.Outcome{
 					Result: adserving.OutcomeFill, Type: "video",
@@ -107,14 +172,14 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, omidFn
 		}
 
 		winner, err := fetchVideoWinner(ctx, sspURL, placementID, traceID, r.URL.Query(), nil)
-		if err != nil || winner == nil || winner.NoBid || winner.MediaURL == "" {
+		if err != nil || winner == nil || winner.NoBid || (winner.MediaURL == "" && winner.AdM == "") {
 			switch {
 			case err != nil:
 				reqLog.Warn("video auction failed", "error", err)
 			case winner == nil || winner.NoBid:
 				reqLog.Info("video auction: no bid")
 			default:
-				reqLog.Warn("winner had empty MediaURL", "crid", winner.CreativeID)
+				reqLog.Warn("winner had neither adm nor MediaURL", "crid", winner.CreativeID)
 			}
 			serveVideoNoBid(w, reqLog, stubFn, houseAdFn, traceID)
 			return
@@ -163,7 +228,14 @@ func vastHandler(log *slog.Logger, trackerURL, sspURL, secureBase string, omidFn
 				NotExecutedURL: adserving.AppendClientMacroParams(adserving.BuildVideoEventURL(macroCtx, "omid-not-executed"), "omid-not-executed"),
 			}}
 		}
-		xmlBytes, err := vast.BuildLinearAd(spec)
+		// Standard path: serve the winner's bid.adm VAST with our trackers
+		// injected; fallback: local build from MediaURL (adFromWinner).
+		ad, ok := adFromWinner(r, winner, spec, consumeAdMFn(), secureBase, reqLog)
+		if !ok {
+			serveVideoNoBid(w, reqLog, stubFn, houseAdFn, traceID)
+			return
+		}
+		xmlBytes, err := vast.BuildDocument([]vast.Ad{ad})
 		if err != nil {
 			reqLog.Error("vast build failed", "error", err)
 			http.Error(w, "vast build failed", http.StatusInternalServerError)
@@ -275,18 +347,18 @@ func macroCtxForWinner(winner *sspVideoWinner, trackerURL, secureBase string) ad
 // why it may attempt more auctions than the pod size. Returns the rendered pod
 // XML and the number of ads actually filled (0 when nothing filled). Each ad
 // carries its own signed trackers, so quartile beacons fire per ad in the pod.
-func buildPodVAST(ctx context.Context, sspURL, trackerURL, secureBase string, r *http.Request, placementID string, incoming url.Values, podSize int, omidFn func() (string, string), reqLog *slog.Logger) ([]byte, int) {
-	var specs []vast.LinearSpec
+func buildPodVAST(ctx context.Context, sspURL, trackerURL, secureBase string, r *http.Request, placementID string, incoming url.Values, podSize int, omidFn func() (string, string), consumeAdM bool, reqLog *slog.Logger) ([]byte, int) {
+	var ads []vast.Ad
 	seenAdv := map[string]bool{}
 	var excludeAdv []string // picked advertiser domains, threaded to each sub-auction as badv
 	maxAttempts := podSize * 3
-	for attempt := 0; attempt < maxAttempts && len(specs) < podSize; attempt++ {
+	for attempt := 0; attempt < maxAttempts && len(ads) < podSize; attempt++ {
 		// Each sub-auction excludes the advertisers already in the pod (OpenRTB
 		// badv → SSP → exchange → DSP), so competitive separation is enforced at
 		// the auction, not just skipped post-hoc — a pod fills distinct
 		// advertisers even when one would otherwise win every deterministic bid.
 		winner, err := fetchVideoWinner(ctx, sspURL, placementID, "", incoming, excludeAdv)
-		if err != nil || winner == nil || winner.NoBid || winner.MediaURL == "" {
+		if err != nil || winner == nil || winner.NoBid || (winner.MediaURL == "" && winner.AdM == "") {
 			continue
 		}
 		adv := strings.ToLower(winner.AdvertiserDomain)
@@ -302,7 +374,7 @@ func buildPodVAST(ctx context.Context, sspURL, trackerURL, secureBase string, r 
 		// here is already the per-request beacon base). No-op otherwise.
 		winner.MediaURL = rewriteHostIfSecure(r, winner.MediaURL, secureBase)
 		spec := buildVASTSpec(winner, macroCtxForWinner(winner, trackerURL, secureBase))
-		spec.Sequence = len(specs) + 1
+		spec.Sequence = len(ads) + 1
 		if vendor, scriptURL := omidFn(); scriptURL != "" {
 			spec.Verifications = []vast.OMIDVerification{{
 				Vendor:         vendor,
@@ -310,17 +382,23 @@ func buildPodVAST(ctx context.Context, sspURL, trackerURL, secureBase string, r 
 				NotExecutedURL: adserving.AppendClientMacroParams(adserving.BuildVideoEventURL(macroCtxForWinner(winner, trackerURL, secureBase), "omid-not-executed"), "omid-not-executed"),
 			}}
 		}
-		specs = append(specs, spec)
+		// Each pod slot takes the winner's adm when present (standard path),
+		// local build otherwise — a pod can mix both shapes.
+		ad, ok := adFromWinner(r, winner, spec, consumeAdM, secureBase, reqLog)
+		if !ok {
+			continue
+		}
+		ads = append(ads, ad)
 	}
-	if len(specs) == 0 {
+	if len(ads) == 0 {
 		return nil, 0
 	}
-	xmlBytes, err := vast.BuildPod(specs)
+	xmlBytes, err := vast.BuildDocument(ads)
 	if err != nil {
 		reqLog.Error("vast pod build failed", "error", err)
 		return nil, 0
 	}
-	return xmlBytes, len(specs)
+	return xmlBytes, len(ads)
 }
 
 func firstNonEmpty(vals ...string) string {

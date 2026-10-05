@@ -22,10 +22,15 @@ exchange -> dsp_int: 3a. Fan-out (parallel)
 exchange -> dsp_c1: 3b. Fan-out (parallel)
 exchange -> dsp_c2: 3c. Fan-out (parallel)
 
-dsp_int -> exchange: 4a. Bid 2.50 CPM
+dsp_int -> exchange: 4a. Bid 2.50 CPM (video/audio: VAST 4.2 in adm, protocol 13)
 dsp_c1 -> exchange: 4b. Bid 4.73 CPM
 dsp_c2 -> exchange: 4c. Bid 5.50 CPM
 
+# Winner assembly: the exchange substitutes the OpenRTB §4.4 auction macros
+# (${AUCTION_PRICE} = clearing price, ${AUCTION_ID}, ${AUCTION_CURRENCY})
+# into the winner's adm; the SSP forwards adm gated on the imp's advertised
+# protocols; the publisher-adserver serves the buyer's VAST with platform-
+# signed trackers injected (MediaURL ext = fallback when adm is absent).
 exchange -> adserver: 5. Winner - serve creative
 adserver -> browser: 6. HTML + pixel URLs (macros substituted)
 

@@ -23,6 +23,11 @@ func noOMID() (string, string) { return "", "" }
 // the no-bid → stub VAST path (prod defaults the fallback OFF → empty no-fill).
 func alwaysStub() bool { return true }
 
+// alwaysConsumeAdM mirrors the deployed default of
+// publisher_adserver.consume_adm (true): winners carrying VAST-in-adm serve
+// that document with platform trackers injected.
+func alwaysConsumeAdM() bool { return true }
+
 // jsonEncode is an alias so the test helper above doesn't need the full
 // encoding/json import surface inline. Keeps the helper readable.
 func jsonEncode(w http.ResponseWriter, v interface{}) error {
@@ -78,7 +83,7 @@ func TestVASTHandler(t *testing.T) {
 	})
 	defer ssp.Close()
 
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", noOMID, alwaysStub, noHouseAds)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", noOMID, alwaysStub, noHouseAds, alwaysConsumeAdM)
 
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=demo-video-mpu", nil)
 	rec := httptest.NewRecorder()
@@ -213,7 +218,7 @@ func TestVASTHandler_OMIDVerifications(t *testing.T) {
 	// OMID configured → served VAST must carry AdVerifications with the vendor
 	// + OM SDK script and a signed verificationNotExecuted beacon.
 	omid := func() (string, string) { return "measure.example", "https://measure.example/omweb-v1.js" }
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", omid, alwaysStub, noHouseAds)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", omid, alwaysStub, noHouseAds, alwaysConsumeAdM)
 
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=pl-1", nil))
@@ -275,7 +280,7 @@ func urlIsHMACValid(t *testing.T, raw string) bool {
 // fallback). Asserts the demo player never sees a 500 even if the
 // auction backend is down.
 func TestVASTHandler_FallsBackWhenSSPUnreachable(t *testing.T) {
-	h := vastHandler(nullLogger(), "http://tracker:8083", "http://127.0.0.1:1", "https://gateway.adtech.local", noOMID, alwaysStub, houseVideoFn())
+	h := vastHandler(nullLogger(), "http://tracker:8083", "http://127.0.0.1:1", "https://gateway.adtech.local", noOMID, alwaysStub, houseVideoFn(), alwaysConsumeAdM)
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=demo", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -294,7 +299,7 @@ func TestVASTHandler_FallsBackWhenSSPUnreachable(t *testing.T) {
 func TestVASTHandler_FallsBackOnNoBid(t *testing.T) {
 	ssp := stubSSP(t, sspVideoWinner{NoBid: true})
 	defer ssp.Close()
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", noOMID, alwaysStub, houseVideoFn())
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", noOMID, alwaysStub, houseVideoFn(), alwaysConsumeAdM)
 	req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=demo", nil)
 	rec := httptest.NewRecorder()
 	h(rec, req)
@@ -323,7 +328,7 @@ func TestVASTHandler_FreshTraceIDPerRequest(t *testing.T) {
 		MediaURL: "https://cdn/x.mp4",
 	})
 	defer ssp.Close()
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", noOMID, alwaysStub, noHouseAds)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", noOMID, alwaysStub, noHouseAds, alwaysConsumeAdM)
 
 	get := func() string {
 		req := httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=p", nil)
@@ -364,7 +369,7 @@ func TestVASTHandler_NoFillWhenStubOff(t *testing.T) {
 	ssp := nobidSSP(t)
 	defer ssp.Close()
 
-	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", noOMID, noStub, noHouseAds)
+	h := vastHandler(nullLogger(), "http://tracker:8083", ssp.URL, "https://gateway.adtech.local", noOMID, noStub, noHouseAds, alwaysConsumeAdM)
 	rec := httptest.NewRecorder()
 	h(rec, httptest.NewRequest("GET", "/v1/pubad/video/vast?placement_id=pl-1", nil))
 
