@@ -144,8 +144,8 @@
       <div class="flex justify-end mb-3">
         {{ template "button" (dict "label" "+ Upload audience" "variant" "secondary" "size" "sm" "onclick" "document.getElementById('newAudience').classList.remove('hidden')") }}
       </div>
-      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Taxonomy" "Fee" "Members" "Match rate" "Updated" "")) }}
-        <tr><td colspan="9" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
+      {{ template "table-start" (dict "headers" (slice "Name" "Type" "Visibility" "Targeted by" "Taxonomy" "Fee" "Members" "Match rate" "Updated" "")) }}
+        <tr><td colspan="10" class="px-3 py-6 text-center text-sm text-gray-400">loading…</td></tr>
       {{ template "table-end" . }}
       {{ template "card-end" . }}
 
@@ -2420,6 +2420,9 @@ async function loadAudiences() {
         <td class="px-3 py-2 font-medium">${esc(a.name)}</td>
         <td class="px-3 py-2 font-mono text-xs">${esc(a.type)}</td>
         <td class="px-3 py-2"><span class="text-xs px-1.5 py-0.5 rounded ${a.visibility === 'public' ? 'bg-info/15 text-info' : 'bg-surface-3 text-gray-500'}">${a.visibility === 'public' ? 'public' : 'DSP-private'}</span></td>
+        <td class="px-3 py-2">${(a.targeted_by || []).length
+          ? `<span class="text-xs" title="${esc(a.targeted_by.join(', '))}">${esc(a.targeted_by[0])}${a.targeted_by.length > 1 ? ` <span class='text-gray-400'>+${a.targeted_by.length - 1}</span>` : ''}</span>`
+          : `<span class="text-xs px-1.5 py-0.5 rounded bg-warning/15 text-warning" title="No campaign includes this audience — members won't affect bidding until one does (Campaigns → edit → Segment include)">unwired</span>`}</td>
         <td class="px-3 py-2">${a.taxonomy_path
           ? `<button onclick="openTaxonomyPicker('${esc(a.id)}', ${a.taxonomy_id})" title="${esc(a.taxonomy_path)}" class="text-xs px-1.5 py-0.5 rounded bg-info/15 text-info hover:bg-info/25">${esc(a.taxonomy_path.split(' | ').pop())}</button>`
           : `<button onclick="openTaxonomyPicker('${esc(a.id)}', null)" class="text-xs px-1.5 py-0.5 rounded border border-dashed border-gray-300 dark:border-gray-600 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300">+ IAB label</button>`}</td>
@@ -2433,9 +2436,9 @@ async function loadAudiences() {
         <td class="px-3 py-2 text-xs text-gray-500">${fmtDate(a.updated_at)}</td>
         <td class="px-3 py-2 text-right"><button onclick="exportSegment('${esc(a.id)}', '${esc(a.name)}')" class="text-xs px-2 py-1 rounded border border-gray-300 dark:border-gray-700 hover:bg-surface-3">Export</button></td>
       </tr>`).join('')
-      : '<tr><td colspan="9" class="px-3 py-8 text-center text-sm text-gray-400">No audiences yet — upload your first list above.</td></tr>';
+      : '<tr><td colspan="10" class="px-3 py-8 text-center text-sm text-gray-400">No audiences yet — upload your first list above.</td></tr>';
   } catch (err) {
-    tbody.innerHTML = `<tr><td colspan="9" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="10" class="px-3 py-6 text-center text-sm text-error">load failed — ${esc(err.message)}</td></tr>`;
   }
   loadDataEarnings();
 }
@@ -2981,6 +2984,14 @@ async function uploadAudience(ev) {
       toast(`Queued for processing (job ${res.job_id}) — check the onboarding monitor for the match rate`, 'success');
     } else {
       toast(`Uploaded — ${res.members_added} new of ${res.members_sent}; match rate ${(res.match_rate * 100).toFixed(0)}%`, 'success');
+      // Wiring check: members in an audience no campaign targets never
+      // affect bidding — say so NOW, not after a confused no-bid hunt.
+      try {
+        const seg = ((await fetchJSON('/v1/api/audiences')) || []).find(a => a.id === res.segment_id);
+        if (seg && !(seg.targeted_by || []).length) {
+          toast(`Heads up: no campaign targets "${seg.name}" yet — these members won't affect bidding until one includes it (Campaigns → edit → Segment include)`, 'error');
+        }
+      } catch (e) { /* advisory only */ }
     }
     loadAudiences();
   } catch (err) { toast('Upload failed: ' + err.message, 'error'); }

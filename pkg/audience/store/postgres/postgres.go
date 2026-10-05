@@ -49,6 +49,11 @@ type Segment struct {
 	// micro-dollars the owner earns when this public labelled segment rides
 	// a bid request an external buyer wins. nil = not monetized.
 	DataFeeMicros *int64 `json:"data_fee_micros,omitempty"`
+	// TargetedBy lists the account's campaign (line item) names whose
+	// include_segments reference this segment — the wiring answer to "will
+	// uploading members here affect bidding?". Empty = unwired: members are
+	// stored but nothing bids on them (the portal badges this).
+	TargetedBy []string `json:"targeted_by"`
 }
 
 // ListSegments returns every segment for an account with its member count,
@@ -57,15 +62,25 @@ type Segment struct {
 func (s *Store) ListSegments(ctx context.Context, accountID string) ([]Segment, error) {
 	out := []Segment{}
 	err := s.withTenant(ctx, accountID, func(tx *sql.Tx) error {
+		// tb: which of the account's campaigns target each segment
+		// (include_segments holds segment ids as text) — surfaces "unwired"
+		// audiences whose members can never affect bidding.
 		const q = `
 SELECT s.id::text, s.name, s.type, s.status, s.source, s.visibility,
        COALESCE(c.n, 0), s.updated_at, s.match_rate, s.last_upload_at,
-       s.taxonomy_id, t.path, s.data_fee_micros
+       s.taxonomy_id, t.path, s.data_fee_micros, COALESCE(tb.names, '{}')
 FROM audience_segments s
 LEFT JOIN (
     SELECT segment_id, count(*) AS n FROM audience_segment_members GROUP BY segment_id
 ) c ON c.segment_id = s.id
 LEFT JOIN iab_audience_taxonomy t ON t.id = s.taxonomy_id
+LEFT JOIN (
+    SELECT seg_ref, array_agg(DISTINCT li.name) AS names
+    FROM targeting_rules tr
+    JOIN line_items li ON li.id = tr.line_item_id
+    CROSS JOIN LATERAL unnest(tr.include_segments) AS seg_ref
+    GROUP BY seg_ref
+) tb ON tb.seg_ref = s.id::text
 WHERE s.account_id = $1::uuid
 ORDER BY s.updated_at DESC`
 		rows, err := tx.QueryContext(ctx, q, accountID)
@@ -78,7 +93,8 @@ ORDER BY s.updated_at DESC`
 			if err := rows.Scan(&seg.ID, &seg.Name, &seg.Type, &seg.Status,
 				&seg.Source, &seg.Visibility, &seg.Members, &seg.UpdatedAt,
 				&seg.MatchRate, &seg.LastUploadAt,
-				&seg.TaxonomyID, &seg.TaxonomyPath, &seg.DataFeeMicros); err != nil {
+				&seg.TaxonomyID, &seg.TaxonomyPath, &seg.DataFeeMicros,
+				(*pq.StringArray)(&seg.TargetedBy)); err != nil {
 				return err
 			}
 			out = append(out, seg)
