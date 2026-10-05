@@ -392,18 +392,29 @@ func main() {
 // Only runs at boot; per-pod row only gets the value on first-ever boot
 // per registry's exists-check semantics.
 func dspSeedOverrides(profileName string, log *slog.Logger) map[string]string {
+	// OUR DSP resolves identities by default: the in-memory graph preload was
+	// built to make this QPS-safe, and off-by-default manufactured mystery
+	// no-bids (a CRM-matched visitor on a second device never resolved — the
+	// first-party-data demo died until the knob was hand-flipped). Competitor
+	// profiles stay off: they model EXTERNAL bidders who don't have our graph.
+	extra := func(m map[string]string) map[string]string {
+		if profileName == "internal" {
+			m[keys.DSP.IdentityResolutionEnabled.Key()] = "true"
+		}
+		return m
+	}
 	if profile, err := FindProfile(profileName, log); err == nil {
-		return map[string]string{
+		return extra(map[string]string{
 			keys.DSP.NoisePct.Key():  strconv.FormatFloat(float64(profile.NoisePct), 'f', -1, 64),
 			keys.DSP.NoBidRate.Key(): strconv.FormatFloat(profile.NoBidRate, 'f', -1, 64),
-		}
+		})
 	}
 	if row := dspRowFromEnvDB(profileName, log); row != nil {
 		log.Info("profile YAML not found, seeded from postgres dsps row", "profile", profileName, "noise_pct", row.NoisePct, "no_bid_rate", row.NoBidRate)
-		return map[string]string{
+		return extra(map[string]string{
 			keys.DSP.NoisePct.Key():  strconv.Itoa(row.NoisePct),
 			keys.DSP.NoBidRate.Key(): strconv.FormatFloat(row.NoBidRate, 'f', -1, 64),
-		}
+		})
 	}
 	log.Warn("profile YAML and postgres dsps row both unavailable, skipping seed-default override", "profile", profileName)
 	return nil
