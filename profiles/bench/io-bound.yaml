@@ -1,0 +1,25 @@
+name: io-bound
+description: "SCENARIO: I/O-bound — the mirror of compute-ceiling. Tiny cheap compute, but 10ms async network round-trips (freqcap+budget) dominate. Throughput is bounded by latency ÷ concurrency, NOT CPU — crank concurrency to recover it."
+campaigns: 50
+bids: 20
+targeting: broad
+channel: display
+concurrency: 200
+duration: 5s
+io_latency_ms: 10
+price_mode: first_price
+floor_price: 0.5
+slots: 1
+match_rate: 100
+creatives_per: 2
+slot_w: 300
+slot_h: 250
+separation: false
+shading: disabled
+stage_deals: false
+stage_identity: false
+stage_freq_cap: true
+stage_budget: true
+serial_io: false
+max_procs: 0
+mem_limit_mib: 0
