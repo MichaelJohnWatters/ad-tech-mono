@@ -42,6 +42,35 @@ func serveGUI(addr string) {
 		_ = json.NewEncoder(w).Encode(buildSample(p))
 	})
 
+	// /api/sweep (POST {config, field, values:[]}) → run the config once per
+	// value, return the points. Serialized via the same running guard below.
+	mux.HandleFunc("/api/sweep", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var body struct {
+			Profile
+			Field  string    `json:"field"`
+			Values []float64 `json:"values"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"error":"bad config"}`, http.StatusBadRequest)
+			return
+		}
+		if !contains(sweepFields, body.Field) {
+			http.Error(w, `{"error":"unknown sweep field"}`, http.StatusBadRequest)
+			return
+		}
+		if len(body.Values) == 0 || len(body.Values) > 24 {
+			http.Error(w, `{"error":"provide 1-24 values"}`, http.StatusBadRequest)
+			return
+		}
+		base := clampProfile(body.Profile)
+		dur, err := time.ParseDuration(base.Duration)
+		if err != nil || dur <= 0 || dur > 30*time.Second {
+			dur = 2 * time.Second
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"field": body.Field, "points": sweep(base, body.Field, body.Values, dur)})
+	})
+
 	// /api/run (POST) → run once with the posted config, return the Result.
 	// Serialized: a run saturates the cores, so a second concurrent run would
 	// corrupt both — return 429 if one is already in flight.
@@ -85,36 +114,9 @@ func serveGUI(addr string) {
 	}
 }
 
-// clampProfile bounds browser-supplied config so a run can't wedge the host,
-// and normalises the enum fields. Shared by /api/run and /api/sample.
-func clampProfile(p Profile) Profile {
-	if p.Campaigns <= 0 || p.Campaigns > 100000 {
-		p.Campaigns = 200
-	}
-	if p.Bids <= 0 || p.Bids > 4096 {
-		p.Bids = 25
-	}
-	if p.Concurrency <= 0 || p.Concurrency > 256 {
-		p.Concurrency = defaultConcurrency()
-	}
-	switch p.Targeting {
-	case "none", "broad", "dense", "extreme":
-	default:
-		p.Targeting = "dense"
-	}
-	switch p.Channel {
-	case "display", "video", "audio", "native", "retail", "dooh":
-	default:
-		p.Channel = "display"
-	}
-	if p.IOLatencyMs < 0 || p.IOLatencyMs > 1000 {
-		p.IOLatencyMs = 0
-	}
-	if p.Duration == "" {
-		p.Duration = "3s"
-	}
-	return p
-}
+// clampProfile bounds browser-supplied config so a run can't wedge the host.
+// normalize() does the field-level defaulting/bounding; shared with the CLI.
+func clampProfile(p Profile) Profile { return normalize(p) }
 
 // stackReachable is a best-effort "is the local stack up" check for the GUI
 // banner (mirrors the bench.sh guard's intent, advisory here not fatal).
@@ -184,14 +186,51 @@ const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
     <option value="audio">audio → single-winner</option><option value="native">native → single-winner</option>
     <option value="retail">retail → relevance-weighted</option><option value="dooh">dooh → timeslot</option>
   </select></div>
+  <div><label>Price mode</label><select id="price_mode">
+    <option value="first_price">first price</option><option value="second_price">second price</option></select></div>
+  <div><label>Floor price ($)</label><input id="floor_price" type="number" step="0.1" min="0"></div>
+  <div><label>Slots / winners</label><input id="slots" type="number" min="1"></div>
+  <div><label>Match rate (%)</label><input id="match_rate" type="number" min="0" max="100"></div>
+  <div><label>Creatives / campaign</label><input id="creatives_per" type="number" min="1"></div>
+  <div><label>Shading</label><select id="shading">
+    <option value="disabled">disabled</option><option value="conservative">conservative</option>
+    <option value="moderate">moderate</option><option value="aggressive">aggressive</option></select></div>
+  <div><label>Slot size W×H</label><div style="display:flex;gap:4px">
+    <input id="slot_w" type="number" min="1" style="width:50%"><input id="slot_h" type="number" min="1" style="width:50%"></div></div>
   <div><label>Duration</label><input id="duration" placeholder="3s"></div>
-  <div><label>Simulated I/O (ms/cycle)</label><input id="io_latency_ms" type="number" min="0" value="0">
-    <div class="hint">0 = pure compute · >0 = illustrative only</div></div>
+  <div><label>Simulated I/O (ms/round-trip)</label><input id="io_latency_ms" type="number" min="0" value="0">
+    <div class="hint">per network stage · 0 = pure compute</div></div>
 </div>
-<div style="display:flex;gap:10px">
+
+<details style="margin-bottom:14px">
+  <summary>⚙ Platform stages (Tier-3) — MODELED, toggle to A/B their cost</summary>
+  <div class="body">
+    The live platform wraps the auction in stages this harness skips. These add a MODEL so you can run with/without —
+    CPU-bound ones do real work; Redis-bound ones add one <b>simulated I/O round-trip</b> each (set Simulated I/O &gt; 0 to see them).
+    Approximation only — real deps are concurrent/contended; <code>make loadtest-ramp</code> is the truth.
+    <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px">
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="stage_deals"> Deals (CPU)</label>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="stage_identity"> Identity graph (CPU)</label>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="stage_freq_cap"> Freq cap (sim Redis)</label>
+      <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="stage_budget"> Budget gate (sim Redis)</label>
+      <label style="display:flex;gap:6px;align-items:center" title="Real auction option (not Tier-3): one advertiser/category per page"><input type="checkbox" id="separation"> Competitive separation</label>
+    </div>
+  </div>
+</details>
+
+<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
   <button id="run" onclick="run()">Run</button>
   <button class="ghost" onclick="sample()">Show example data ▾</button>
+  <span style="flex:1"></span>
+  <label style="font-size:11px;color:#94a3b8">Sweep</label>
+  <select id="sweepField" style="width:auto">
+    <option value="">— off —</option><option>campaigns</option><option>bids</option><option>concurrency</option>
+    <option value="io">io</option><option>floor</option><option>slots</option><option>match</option><option>creatives</option>
+  </select>
+  <input id="sweepValues" placeholder="100,500,1000,2000" style="width:180px">
+  <button class="ghost" onclick="runSweep()">Run sweep</button>
 </div>
+<div id="sweepOut" class="out"></div>
 
 <div id="out" class="out">
   <div class="big"><span id="aps">—</span> <small>auctions/sec</small></div>
@@ -217,19 +256,48 @@ const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
 
 <script>
 let profiles=[];
-function cfg(){return{campaigns:+campaigns.value,bids:+bids.value,targeting:targeting.value,channel:channel.value,concurrency:+concurrency.value,duration:duration.value,io_latency_ms:+io_latency_ms.value};}
+const $=id=>document.getElementById(id);
+function cfg(){return{
+  campaigns:+campaigns.value,bids:+bids.value,targeting:targeting.value,channel:channel.value,
+  concurrency:+concurrency.value,duration:duration.value,io_latency_ms:+io_latency_ms.value,
+  price_mode:price_mode.value,floor_price:+floor_price.value,slots:+slots.value,match_rate:+match_rate.value,
+  creatives_per:+creatives_per.value,slot_w:+slot_w.value,slot_h:+slot_h.value,shading:shading.value,
+  stage_deals:stage_deals.checked,stage_identity:stage_identity.checked,stage_freq_cap:stage_freq_cap.checked,stage_budget:stage_budget.checked,
+  separation:separation.checked,
+};}
 async function init(){
   profiles=await (await fetch('/api/profiles')).json();
-  const sel=document.getElementById('profile');
+  const sel=$('profile');
   sel.innerHTML=profiles.map((p,i)=>'<option value="'+i+'">'+p.name+' — '+(p.description||'')+'</option>').join('');
   sel.onchange=fill; fill();
 }
 function fill(){
-  const p=profiles[document.getElementById('profile').value]||{};
+  const p=profiles[$('profile').value]||{};
   campaigns.value=p.campaigns||200; bids.value=p.bids||25;
   targeting.value=p.targeting||'dense'; channel.value=p.channel||'display';
   concurrency.value=p.concurrency||0; duration.value=p.duration||'3s';
   io_latency_ms.value=p.io_latency_ms||0;
+  price_mode.value=p.price_mode||'first_price'; floor_price.value=p.floor_price||0.5;
+  slots.value=p.slots||(p.channel==='retail'?5:1); match_rate.value=(p.match_rate==null?100:p.match_rate);
+  creatives_per.value=p.creatives_per||2; slot_w.value=p.slot_w||300; slot_h.value=p.slot_h||250;
+  shading.value=p.shading||'disabled';
+  stage_deals.checked=!!p.stage_deals; stage_identity.checked=!!p.stage_identity;
+  stage_freq_cap.checked=!!p.stage_freq_cap; stage_budget.checked=!!p.stage_budget;
+  separation.checked=!!p.separation;
+}
+async function runSweep(){
+  const field=$('sweepField').value; if(!field){alert('pick a sweep dimension');return;}
+  const values=($('sweepValues').value||'').split(',').map(s=>parseFloat(s.trim())).filter(v=>!isNaN(v));
+  if(!values.length){alert('enter comma-separated values');return;}
+  const box=$('sweepOut'); box.style.display='block'; box.innerHTML='Running sweep…';
+  try{
+    const r=await (await fetch('/api/sweep',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(Object.assign(cfg(),{field:field,values:values}))})).json();
+    if(r.error){box.innerHTML='<span style="color:#fca5a5">'+r.error+'</span>';return;}
+    box.innerHTML='<table style="width:100%;font-size:13px"><thead><tr style="color:#94a3b8;text-align:left">'+
+      '<th>'+field+'</th><th>auctions/sec</th><th>p50 µs</th><th>p99 µs</th></tr></thead><tbody>'+
+      r.points.map(pt=>'<tr style="border-top:1px solid #1f2937"><td>'+pt.value+'</td><td><b>'+pt.result.auctions_per_sec.toLocaleString()+'</b></td><td>'+pt.result.p50_us+'</td><td>'+pt.result.p99_us+'</td></tr>').join('')+
+      '</tbody></table>';
+  }catch(e){box.innerHTML='sweep failed: '+e;}
 }
 async function run(){
   const btn=document.getElementById('run'); btn.disabled=true; btn.textContent='Running…';
