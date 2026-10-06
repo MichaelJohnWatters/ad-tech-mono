@@ -25,6 +25,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strconv"
 	"strings"
@@ -92,6 +93,12 @@ type Profile struct {
 	// them up (the naive serial worst-case) — useful only to contrast "why
 	// async matters".
 	SerialIO bool `yaml:"serial_io" json:"serial_io"`
+
+	// --- Hardware: how much of the host the binary is allowed to use ---
+	// These bound the Go runtime for the run (restored after), so you can
+	// simulate a smaller box without changing the real hardware.
+	MaxProcs    int `yaml:"max_procs" json:"max_procs"`         // GOMAXPROCS: CPU cores the scheduler may use (0 = all host cores)
+	MemLimitMiB int `yaml:"mem_limit_mib" json:"mem_limit_mib"` // GOMEMLIMIT: soft heap ceiling in MiB (0 = none)
 }
 
 const profileDir = "profiles/bench"
@@ -120,6 +127,8 @@ func main() {
 		stIdentity  = flag.Bool("stage-identity", false, "Tier-3 (modeled): identity-graph expansion")
 		stFreqCap   = flag.Bool("stage-freqcap", false, "Tier-3 (modeled): frequency cap (simulated Redis)")
 		stBudget    = flag.Bool("stage-budget", false, "Tier-3 (modeled): budget gate (simulated Redis)")
+		maxProcs    = flag.Int("maxprocs", 0, "hardware: GOMAXPROCS — CPU cores the run may use (0 = all)")
+		memLimit    = flag.Int("memlimit", 0, "hardware: GOMEMLIMIT soft heap ceiling in MiB (0 = none)")
 		serve       = flag.Bool("serve", false, "start the web GUI instead of running once")
 		addr        = flag.String("addr", "localhost:7777", "web GUI listen address (with -serve)")
 	)
@@ -202,6 +211,12 @@ func main() {
 	if *duration != "" {
 		p.Duration = *duration
 	}
+	if *maxProcs > 0 {
+		p.MaxProcs = *maxProcs
+	}
+	if *memLimit > 0 {
+		p.MemLimitMiB = *memLimit
+	}
 	p = normalize(p)
 	dur, _ := time.ParseDuration(p.Duration)
 
@@ -279,6 +294,14 @@ func normalize(p Profile) Profile {
 	}
 	if p.IOLatencyMs < 0 || p.IOLatencyMs > 1000 {
 		p.IOLatencyMs = 0
+	}
+	// Hardware bounds: 0 = "use the host default". Cap cores at the host count
+	// (asking for more than exist is meaningless) and keep the mem limit sane.
+	if p.MaxProcs < 0 || p.MaxProcs > runtime.NumCPU() {
+		p.MaxProcs = 0
+	}
+	if p.MemLimitMiB < 0 || p.MemLimitMiB > 1_000_000 {
+		p.MemLimitMiB = 0
 	}
 	return p
 }
@@ -460,6 +483,17 @@ func newRunCtx(p Profile) *runCtx {
 }
 
 func execute(p Profile, dur time.Duration) Result {
+	// Apply the hardware bounds for the duration of this run, then restore —
+	// runs are serialized, so these process-global knobs are safe to toggle.
+	if p.MaxProcs > 0 {
+		prev := runtime.GOMAXPROCS(p.MaxProcs)
+		defer runtime.GOMAXPROCS(prev)
+	}
+	if p.MemLimitMiB > 0 {
+		prev := debug.SetMemoryLimit(int64(p.MemLimitMiB) * 1024 * 1024)
+		defer debug.SetMemoryLimit(prev)
+	}
+
 	rc := newRunCtx(p)
 
 	var ops int64

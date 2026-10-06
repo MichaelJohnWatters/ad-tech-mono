@@ -3,8 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
-	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,13 @@ func serveGUI(addr string) {
 		}
 		p = clampProfile(p)
 		_ = json.NewEncoder(w).Encode(buildSample(p))
+	})
+
+	// /api/host → the host's hardware so the GUI can label the "0 = all N cores"
+	// default and show what a run is actually bounded by.
+	mux.HandleFunc("/api/host", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"cores": runtime.NumCPU()})
 	})
 
 	// /api/complexity (POST) → the cost profile for a config (no run). Lets the
@@ -153,9 +161,13 @@ func serveGUI(addr string) {
 	})
 
 	fmt.Printf("benchrun GUI → http://%s  (stop the stack first for clean numbers)\n", addr)
-	if cluster := stackReachable(); cluster {
-		fmt.Println("WARNING: a cluster looks reachable — numbers will be noisy. Pause Rancher for comparable results.")
-	}
+	// Advisory only, and async so it never delays startup: a running stack
+	// competes for CPU and skews the numbers.
+	go func() {
+		if stackReachable() {
+			fmt.Println("WARNING: the local stack looks reachable (serving ports answer) — pause Rancher for comparable numbers.")
+		}
+	}()
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		fmt.Println("benchrun serve:", err)
 	}
@@ -165,10 +177,19 @@ func serveGUI(addr string) {
 // normalize() does the field-level defaulting/bounding; shared with the CLI.
 func clampProfile(p Profile) Profile { return normalize(p) }
 
-// stackReachable is a best-effort "is the local stack up" check for the GUI
-// banner (mirrors the bench.sh guard's intent, advisory here not fatal).
+// stackReachable is a best-effort, dependency-free check that the local adtech
+// stack is up — used ONLY for an advisory banner (a running stack competes for
+// CPU and skews the numbers). No kubectl: benchrun is a self-contained host
+// tool, so we just probe a couple of the stack's serving ports over TCP.
 func stackReachable() bool {
-	return exec.Command("kubectl", "cluster-info").Run() == nil
+	for _, port := range []string{"8081", "8082", "8084"} { // exchange, dsp-internal, ssp
+		c, err := net.DialTimeout("tcp", net.JoinHostPort("localhost", port), 150*time.Millisecond)
+		if err == nil {
+			_ = c.Close()
+			return true
+		}
+	}
+	return false
 }
 
 const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
@@ -194,14 +215,30 @@ const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
   .hint{font-size:10px;color:#64748b;margin-top:2px}
   #cx{margin-top:18px;background:#111827;border:1px solid #1f2937;border-radius:8px;padding:14px 16px}
   #cx h3{font-size:13px;margin:0 0 2px} #cxDom{font-size:12px;color:#cbd5e1;background:#0b0f17;border:1px solid #1f2937;border-radius:6px;padding:8px 10px;margin:8px 0 12px;line-height:1.5}
+  #cxFormula{font:13px ui-monospace,Menlo,Consolas,monospace;color:#6ee7b7;background:#0b0f17;border:1px solid #334155;border-radius:6px;padding:10px 12px;margin:8px 0 4px;overflow:auto;white-space:nowrap}
+  #cxLegend{font-size:10px;color:#64748b;margin-bottom:10px}
   #cxSum{font-size:11px;color:#94a3b8;margin-bottom:10px;font-variant-numeric:tabular-nums}
   table.cx{width:100%;border-collapse:collapse;font-size:12px}
+  table.cx th{text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#64748b;padding:0 8px 4px;font-weight:600}
   table.cx td{padding:6px 8px;border-top:1px solid #1f2937;vertical-align:top}
   table.cx td.f{font-weight:600;white-space:nowrap;color:#e5e7eb} table.cx td.v{color:#9ca3af;white-space:nowrap;font-variant-numeric:tabular-nums}
+  table.cx td.o{font:12px ui-monospace,Menlo,Consolas,monospace;color:#a5b4fc;white-space:nowrap}
   table.cx td.d{color:#cbd5e1;line-height:1.45}
   .wt{display:inline-block;font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em}
   .wt.light{background:#064e3b;color:#6ee7b7} .wt.moderate{background:#3f3f00;color:#fde047}
   .wt.heavy{background:#4a2600;color:#fdba74} .wt.extreme{background:#4c0519;color:#fda4af} .wt.off{background:#1f2937;color:#64748b}
+  .hw{background:#111827;border:1px solid #1f2937;border-radius:8px;padding:10px 14px;margin-bottom:14px}
+  .hw .ttl{font-weight:600;font-size:13px;margin-bottom:8px}
+  .hwgrid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  #dg{background:#111827;border:1px solid #1f2937;border-radius:8px;padding:14px 16px;margin-top:18px;overflow-x:auto}
+  #dg h3{font-size:13px;margin:0 0 4px} #dgHead{font-size:11px;color:#94a3b8;margin-bottom:12px}
+  .dgRow{display:flex;align-items:stretch;gap:0;min-width:max-content}
+  .dgBox{background:#0b0f17;border:1px solid #334155;border-radius:6px;padding:8px 10px;font-size:11px;color:#e5e7eb;text-align:center;min-width:70px;display:flex;flex-direction:column;justify-content:center}
+  .dgBox small{color:#64748b;font-size:10px;margin-top:2px;font-variant-numeric:tabular-nums}
+  .dgBox.off{opacity:.3;border-style:dashed} .dgBox.off small{color:#475569}
+  .dgBox.hot{border-color:#6366f1;background:#1e1b4b} .dgBox.win{border-color:#059669;background:#064e3b;color:#6ee7b7}
+  .dgBox.io{border-color:#b45309;background:#3f2800;color:#fdba74}
+  .dgArr{display:flex;align-items:center;color:#475569;padding:0 6px;font-size:14px}
 </style></head><body>
 <h1>benchrun — auction + bid compute load generator</h1>
 <div class="sub">Dial the world, hit Run. Measures the COMPUTE path (no I/O) — see "What's being tested".</div>
@@ -277,6 +314,17 @@ const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
   </div>
 </details>
 
+<div class="hw">
+  <div class="ttl">🖥 Hardware — how much of the host this run gets
+    <span style="font-weight:400;color:#64748b;font-size:11px">(bounds the Go runtime for the run, then restores — simulate a smaller box)</span></div>
+  <div class="hwgrid">
+    <div><label>CPU cores (GOMAXPROCS)</label><input id="max_procs" type="number" min="0" value="0">
+      <div class="hint" id="coresHint">0 = all host cores</div></div>
+    <div><label>Memory limit (GOMEMLIMIT, MiB)</label><input id="mem_limit_mib" type="number" min="0" value="0">
+      <div class="hint">0 = no soft heap ceiling (GC pressure if set low)</div></div>
+  </div>
+</div>
+
 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
   <button id="run" onclick="run()">Run</button>
   <button class="ghost" onclick="sample()">Show example data ▾</button>
@@ -314,11 +362,19 @@ const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
   </div>
 </details>
 
+<div id="dg">
+  <h3>🔬 What the benchmark runs <span style="font-weight:400;color:#64748b;font-size:11px">— live pipeline for this config</span></h3>
+  <div id="dgHead"></div>
+  <div class="dgRow" id="dgRow"></div>
+</div>
+
 <div id="cx">
   <h3>⚖ Cost profile for this config <span style="font-weight:400;color:#64748b;font-size:11px">— updates live as you change fields</span></h3>
+  <div id="cxFormula">—</div>
+  <div id="cxLegend"></div>
   <div id="cxDom">—</div>
   <div id="cxSum"></div>
-  <table class="cx"><tbody id="cxRows"></tbody></table>
+  <table class="cx"><thead><tr><th>field</th><th>value</th><th>Big-O</th><th>cost</th><th style="text-align:right">weight</th></tr></thead><tbody id="cxRows"></tbody></table>
 </div>
 
 <script>
@@ -331,6 +387,7 @@ function cfg(){return{
   creatives_per:+creatives_per.value,slot_w:+slot_w.value,slot_h:+slot_h.value,shading:shading.value,
   stage_deals:stage_deals.checked,stage_identity:stage_identity.checked,stage_freq_cap:stage_freq_cap.checked,stage_budget:stage_budget.checked,
   separation:separation.checked,serial_io:serial_io.checked,
+  max_procs:+max_procs.value,mem_limit_mib:+mem_limit_mib.value,
 };}
 function renderProfiles(selectName){
   const sel=$('profile');
@@ -341,11 +398,14 @@ async function fetchProfiles(selectName){
   profiles=await (await fetch('/api/profiles')).json();
   renderProfiles(selectName);
 }
+let hostCores=0;
 async function init(){
+  try{hostCores=(await (await fetch('/api/host')).json()).cores||0;}catch(e){}
+  if(hostCores) $('coresHint').textContent='0 = all host cores (host has '+hostCores+')';
   await fetchProfiles();
   $('profile').onchange=fill;
-  // Live cost profile: recompute (debounced) whenever any knob changes.
-  document.querySelectorAll('.grid input,.grid select,#stage_deals,#stage_identity,#stage_freq_cap,#stage_budget,#separation,#serial_io')
+  // Live cost profile + diagram: recompute (debounced) whenever any knob changes.
+  document.querySelectorAll('.grid input,.grid select,.hw input,#stage_deals,#stage_identity,#stage_freq_cap,#stage_budget,#separation,#serial_io')
     .forEach(el=>el.addEventListener('change',refreshCx));
   fill();
 }
@@ -371,13 +431,42 @@ async function doRefreshCx(){
   try{
     const r=await (await fetch('/api/complexity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg())})).json();
     if(r.error) return;
+    cxFormula.textContent=r.formula;
+    cxLegend.textContent=r.legend;
     cxDom.innerHTML='<b>Where the time goes:</b> '+r.dominant;
     cxSum.textContent=r.summary;
     cxRows.innerHTML=r.rows.map(row=>
       '<tr><td class="f">'+row.field+'</td><td class="v">'+row.value+'</td>'+
+      '<td class="o">'+(row.bigo||'')+'</td>'+
       '<td class="d">'+row.detail+'</td>'+
       '<td style="text-align:right"><span class="wt '+row.weight+'">'+row.weight+'</span></td></tr>').join('');
+    renderDiagram(cfg(),r);
   }catch(e){/* advisory panel — ignore transient errors */}
+}
+function renderDiagram(c,r){
+  const cores=(c.max_procs>0?c.max_procs:(hostCores||'all'));
+  const mem=(c.mem_limit_mib>0?c.mem_limit_mib+' MiB':'unbounded');
+  const strat=r.rows.find(x=>x.field==='Bids / auction');
+  const stratTxt=(strat?strat.value.split('→')[1]||'':'').trim();
+  dgHead.innerHTML='<b>'+c.concurrency+'</b> concurrent workers · bounded to <b>'+cores+'</b> core(s) / <b>'+mem+'</b> heap · each worker repeats one cycle:';
+  const net=(c.stage_freq_cap?1:0)+(c.stage_budget?1:0);
+  const ioTxt=net>0?(c.io_latency_ms>0?((c.serial_io?'serial ':'async ')+c.io_latency_ms+'ms'):'0ms (set I/O)'):'off';
+  const tRow=r.rows.find(x=>x.field==='Targeting');
+  const dims=tRow?((tRow.value.match(/(\d+) dims/)||[])[1]||'?'):'?';
+  const box=(cls,title,sub)=>'<div class="dgBox '+cls+'">'+title+(sub?'<small>'+sub+'</small>':'')+'</div>';
+  const arr='<span class="dgArr">▸</span>';
+  const parts=[
+    box('','📥 Request',(c.targeting||'')+' signals'),
+    box(c.stage_deals?'':'off','🤝 Deals',c.stage_deals?'match 32':'off'),
+    box(c.stage_identity?'':'off','🔗 Identity',c.stage_identity?'BFS d3':'off'),
+    box('hot','⚙ DSP bid loop','C='+Number(c.campaigns).toLocaleString()+' ×'+dims+'D'),
+    box('','🎟 Bids','B='+r.eligible),
+    box(c.separation?'':'off','🧮 Separation',c.separation?'dedupe':'off'),
+    box('hot','🏷 Auction',stratTxt),
+    box(net>0&&c.io_latency_ms>0?'io':'off','🌐 I/O',net>0?('freqcap/budget · '+ioTxt):'off'),
+    box('win','🏆 Winner','')
+  ];
+  dgRow.innerHTML=parts.join(arr);
 }
 function fill(){
   const p=profiles[$('profile').value]||{};
@@ -392,6 +481,7 @@ function fill(){
   stage_deals.checked=!!p.stage_deals; stage_identity.checked=!!p.stage_identity;
   stage_freq_cap.checked=!!p.stage_freq_cap; stage_budget.checked=!!p.stage_budget;
   separation.checked=!!p.separation; serial_io.checked=!!p.serial_io;
+  max_procs.value=p.max_procs||0; mem_limit_mib.value=p.mem_limit_mib||0;
   refreshCx();
 }
 async function runSweep(){
