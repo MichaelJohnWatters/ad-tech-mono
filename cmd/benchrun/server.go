@@ -42,6 +42,18 @@ func serveGUI(addr string) {
 		_ = json.NewEncoder(w).Encode(buildSample(p))
 	})
 
+	// /api/complexity (POST) → the cost profile for a config (no run). Lets the
+	// GUI show, live as you turn the knobs, what each one costs + what dominates.
+	mux.HandleFunc("/api/complexity", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		var p Profile
+		if err := json.NewDecoder(r.Body).Decode(&p); err != nil {
+			http.Error(w, `{"error":"bad config"}`, http.StatusBadRequest)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(complexity(clampProfile(p)))
+	})
+
 	// /api/sweep (POST {config, field, values:[]}) → run the config once per
 	// value, return the points. Serialized via the same running guard below.
 	mux.HandleFunc("/api/sweep", func(w http.ResponseWriter, r *http.Request) {
@@ -145,6 +157,16 @@ const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
   .note{margin-top:14px;color:#fbbf24;font-size:11px}
   .warn{background:#3f1d1d;color:#fca5a5;padding:8px 12px;border-radius:6px;font-size:12px;margin-bottom:16px;display:none}
   .hint{font-size:10px;color:#64748b;margin-top:2px}
+  #cx{margin-top:18px;background:#111827;border:1px solid #1f2937;border-radius:8px;padding:14px 16px}
+  #cx h3{font-size:13px;margin:0 0 2px} #cxDom{font-size:12px;color:#cbd5e1;background:#0b0f17;border:1px solid #1f2937;border-radius:6px;padding:8px 10px;margin:8px 0 12px;line-height:1.5}
+  #cxSum{font-size:11px;color:#94a3b8;margin-bottom:10px;font-variant-numeric:tabular-nums}
+  table.cx{width:100%;border-collapse:collapse;font-size:12px}
+  table.cx td{padding:6px 8px;border-top:1px solid #1f2937;vertical-align:top}
+  table.cx td.f{font-weight:600;white-space:nowrap;color:#e5e7eb} table.cx td.v{color:#9ca3af;white-space:nowrap;font-variant-numeric:tabular-nums}
+  table.cx td.d{color:#cbd5e1;line-height:1.45}
+  .wt{display:inline-block;font-size:10px;font-weight:700;padding:1px 7px;border-radius:999px;text-transform:uppercase;letter-spacing:.03em}
+  .wt.light{background:#064e3b;color:#6ee7b7} .wt.moderate{background:#3f3f00;color:#fde047}
+  .wt.heavy{background:#4a2600;color:#fdba74} .wt.extreme{background:#4c0519;color:#fda4af} .wt.off{background:#1f2937;color:#64748b}
 </style></head><body>
 <h1>benchrun — auction + bid compute load generator</h1>
 <div class="sub">Dial the world, hit Run. Measures the COMPUTE path (no I/O) — see "What's being tested".</div>
@@ -256,6 +278,13 @@ const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
   </div>
 </details>
 
+<div id="cx">
+  <h3>⚖ Cost profile for this config <span style="font-weight:400;color:#64748b;font-size:11px">— updates live as you change fields</span></h3>
+  <div id="cxDom">—</div>
+  <div id="cxSum"></div>
+  <table class="cx"><tbody id="cxRows"></tbody></table>
+</div>
+
 <script>
 let profiles=[];
 const $=id=>document.getElementById(id);
@@ -271,7 +300,25 @@ async function init(){
   profiles=await (await fetch('/api/profiles')).json();
   const sel=$('profile');
   sel.innerHTML=profiles.map((p,i)=>'<option value="'+i+'">'+p.name+' — '+(p.description||'')+'</option>').join('');
-  sel.onchange=fill; fill();
+  sel.onchange=fill;
+  // Live cost profile: recompute (debounced) whenever any knob changes.
+  document.querySelectorAll('.grid input,.grid select,#stage_deals,#stage_identity,#stage_freq_cap,#stage_budget,#separation,#serial_io')
+    .forEach(el=>el.addEventListener('change',refreshCx));
+  fill();
+}
+let cxTimer=null;
+function refreshCx(){ clearTimeout(cxTimer); cxTimer=setTimeout(doRefreshCx,120); }
+async function doRefreshCx(){
+  try{
+    const r=await (await fetch('/api/complexity',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(cfg())})).json();
+    if(r.error) return;
+    cxDom.innerHTML='<b>Where the time goes:</b> '+r.dominant;
+    cxSum.textContent=r.summary;
+    cxRows.innerHTML=r.rows.map(row=>
+      '<tr><td class="f">'+row.field+'</td><td class="v">'+row.value+'</td>'+
+      '<td class="d">'+row.detail+'</td>'+
+      '<td style="text-align:right"><span class="wt '+row.weight+'">'+row.weight+'</span></td></tr>').join('');
+  }catch(e){/* advisory panel — ignore transient errors */}
 }
 function fill(){
   const p=profiles[$('profile').value]||{};
@@ -286,6 +333,7 @@ function fill(){
   stage_deals.checked=!!p.stage_deals; stage_identity.checked=!!p.stage_identity;
   stage_freq_cap.checked=!!p.stage_freq_cap; stage_budget.checked=!!p.stage_budget;
   separation.checked=!!p.separation; serial_io.checked=!!p.serial_io;
+  refreshCx();
 }
 async function runSweep(){
   const field=$('sweepField').value; if(!field){alert('pick a sweep dimension');return;}
