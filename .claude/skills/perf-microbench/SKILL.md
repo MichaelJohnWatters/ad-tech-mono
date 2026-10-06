@@ -66,7 +66,14 @@ make bench-run-list                      # saved profiles (profiles/bench/*.yaml
 make bench-run PROFILE=big-world         # 2000 campaigns, all cores, 5s
 make bench-run ARGS='-campaigns 500 -targeting dense -channel retail -concurrency 8 -duration 5s'
 make bench-run PROFILE=standard ARGS='-concurrency 4'   # profile + flag override
+make bench-gui                           # web GUI: profile dropdown + knobs + Run @ localhost:7777
 ```
+
+The GUI (`-serve`) is the same tool with a browser front end — pick a profile
+from the dropdown (autofills the knobs), tweak, Run, read auctions/sec +
+p50/p95/p99. Runs are serialized (a second concurrent run gets 429, since a
+run saturates the cores) and inputs are clamped. Host-only, like
+`cmd/devconsole`.
 
 Saved profiles: `small` (sanity), `standard` (200-campaign display), `big-world`
 (2000-campaign stress), `retail` (relevance-weighted multi-winner), `broad`

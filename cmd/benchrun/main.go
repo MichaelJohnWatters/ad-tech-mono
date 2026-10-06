@@ -38,15 +38,18 @@ import (
 )
 
 // Profile is a saved benchrun configuration (profiles/bench/<name>.yaml).
+// json tags matter: the web GUI reads these lowercased (the dropdown autofill
+// + the /api/run POST body), and Go's marshaler would otherwise emit the
+// capitalized field names.
 type Profile struct {
-	Name        string `yaml:"name"`
-	Description string `yaml:"description"`
-	Campaigns   int    `yaml:"campaigns"`   // size of the DSP warm-cache book (bid-loop cost)
-	Bids        int    `yaml:"bids"`        // cap on eligible bids handed to the auction
-	Targeting   string `yaml:"targeting"`   // broad | dense — how much targeting the request carries
-	Channel     string `yaml:"channel"`     // display | retail
-	Concurrency int    `yaml:"concurrency"` // parallel workers (0 = GOMAXPROCS)
-	Duration    string `yaml:"duration"`    // run length, e.g. "3s"
+	Name        string `yaml:"name" json:"name"`
+	Description string `yaml:"description" json:"description"`
+	Campaigns   int    `yaml:"campaigns" json:"campaigns"`     // size of the DSP warm-cache book (bid-loop cost)
+	Bids        int    `yaml:"bids" json:"bids"`               // cap on eligible bids handed to the auction
+	Targeting   string `yaml:"targeting" json:"targeting"`     // broad | dense — how much targeting the request carries
+	Channel     string `yaml:"channel" json:"channel"`         // display | retail
+	Concurrency int    `yaml:"concurrency" json:"concurrency"` // parallel workers (0 = GOMAXPROCS)
+	Duration    string `yaml:"duration" json:"duration"`       // run length, e.g. "3s"
 }
 
 const profileDir = "profiles/bench"
@@ -61,11 +64,17 @@ func main() {
 		channel     = flag.String("channel", "", "override: display | retail")
 		concurrency = flag.Int("concurrency", 0, "override: parallel workers (default GOMAXPROCS)")
 		duration    = flag.String("duration", "", "override: run length, e.g. 5s")
+		serve       = flag.Bool("serve", false, "start the web GUI instead of running once")
+		addr        = flag.String("addr", "localhost:7777", "web GUI listen address (with -serve)")
 	)
 	flag.Parse()
 
 	if *list {
 		listProfiles()
+		return
+	}
+	if *serve {
+		serveGUI(*addr)
 		return
 	}
 
@@ -107,13 +116,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	run(p, dur)
-}
-
-func run(p Profile, dur time.Duration) {
 	fmt.Printf("benchrun: profile=%s campaigns=%d bids=%d targeting=%s channel=%s concurrency=%d duration=%s\n",
 		p.Name, p.Campaigns, p.Bids, p.Targeting, p.Channel, p.Concurrency, dur)
+	printResult(execute(p, dur))
+}
 
+// Result is one benchrun outcome — shared by the CLI and the web GUI.
+type Result struct {
+	AuctionsPerSec int64         `json:"auctions_per_sec"`
+	Ops            int64         `json:"ops"`
+	Duration       string        `json:"duration"`
+	P50            time.Duration `json:"-"`
+	P95            time.Duration `json:"-"`
+	P99            time.Duration `json:"-"`
+	P50us          float64       `json:"p50_us"`
+	P95us          float64       `json:"p95_us"`
+	P99us          float64       `json:"p99_us"`
+	AllocsPerCycle float64       `json:"allocs_per_cycle"`
+}
+
+// execute runs the compute loop for dur and returns the measured Result
+// (no printing — the CLI formats it, the web handler JSON-encodes it).
+func execute(p Profile, dur time.Duration) Result {
 	campaigns := buildCampaigns(p.Campaigns)
 	req := buildRequest(p.Targeting, p.Channel)
 	engine := auction.NewEngine(clock.Real{})
@@ -150,7 +174,27 @@ func run(p Profile, dur time.Duration) {
 	wg.Wait()
 	runtime.ReadMemStats(&memAfter)
 
-	report(p, dur, ops, lat, memBefore, memAfter)
+	all := make([]time.Duration, 0, ops)
+	for _, w := range lat {
+		all = append(all, w...)
+	}
+	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
+	pct := func(q float64) time.Duration {
+		if len(all) == 0 {
+			return 0
+		}
+		return all[int(q*float64(len(all)-1))]
+	}
+	secs := dur.Seconds()
+	p50, p95, p99 := pct(0.50), pct(0.95), pct(0.99)
+	return Result{
+		AuctionsPerSec: int64(float64(ops) / secs),
+		Ops:            ops,
+		Duration:       dur.String(),
+		P50:            p50, P95: p95, P99: p99,
+		P50us: float64(p50.Microseconds()), P95us: float64(p95.Microseconds()), P99us: float64(p99.Microseconds()),
+		AllocsPerCycle: float64(memAfter.Mallocs-memBefore.Mallocs) / float64(max64(ops, 1)),
+	}
 }
 
 // cycle runs one request through the compute: bid loop → bids → auction.
@@ -189,28 +233,13 @@ func cycle(engine *auction.Engine, campaigns []models.Campaign, req targeting.Re
 	_, _ = engine.RunAuction(nil, bids, ar)
 }
 
-func report(p Profile, dur time.Duration, ops int64, lat [][]time.Duration, before, after runtime.MemStats) {
-	all := make([]time.Duration, 0, ops)
-	for _, w := range lat {
-		all = append(all, w...)
-	}
-	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
-	pct := func(q float64) time.Duration {
-		if len(all) == 0 {
-			return 0
-		}
-		i := int(q * float64(len(all)-1))
-		return all[i]
-	}
-	secs := dur.Seconds()
-	mallocsPerOp := float64(after.Mallocs-before.Mallocs) / float64(max64(ops, 1))
-
+func printResult(r Result) {
 	fmt.Println("────────────────────────────────────────────────")
-	fmt.Printf("  auctions/sec : %s  (%d cycles in %s)\n", commas(int64(float64(ops)/secs)), ops, dur)
-	fmt.Printf("  latency p50  : %s\n", pct(0.50))
-	fmt.Printf("  latency p95  : %s\n", pct(0.95))
-	fmt.Printf("  latency p99  : %s\n", pct(0.99))
-	fmt.Printf("  allocs/cycle : ~%.0f\n", mallocsPerOp)
+	fmt.Printf("  auctions/sec : %s  (%d cycles in %s)\n", commas(r.AuctionsPerSec), r.Ops, r.Duration)
+	fmt.Printf("  latency p50  : %s\n", r.P50)
+	fmt.Printf("  latency p95  : %s\n", r.P95)
+	fmt.Printf("  latency p99  : %s\n", r.P99)
+	fmt.Printf("  allocs/cycle : ~%.0f\n", r.AllocsPerCycle)
 	fmt.Println("────────────────────────────────────────────────")
 	fmt.Println("  NOTE: compute ceiling (no I/O). Real sustained rps is")
 	fmt.Println("  I/O-bound — use `make loadtest-ramp` with the stack up.")
@@ -230,6 +259,24 @@ func loadProfile(name string) (Profile, error) {
 		p.Name = name
 	}
 	return p, nil
+}
+
+// allProfiles returns every saved profile (for the GUI dropdown), name-sorted.
+func allProfiles() []Profile {
+	entries, _ := filepath.Glob(filepath.Join(profileDir, "*.yaml"))
+	sort.Strings(entries)
+	var out []Profile
+	for _, e := range entries {
+		name := filepath.Base(e)
+		name = name[:len(name)-len(".yaml")]
+		if p, err := loadProfile(name); err == nil {
+			if p.Concurrency <= 0 {
+				p.Concurrency = runtime.GOMAXPROCS(0)
+			}
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func listProfiles() {
@@ -312,6 +359,8 @@ func selectCreative(c *models.Campaign, reqW, reqH int) string {
 	}
 	return ""
 }
+
+func defaultConcurrency() int { return runtime.GOMAXPROCS(0) }
 
 func max64(a, b int64) int64 {
 	if a > b {
