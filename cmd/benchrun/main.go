@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -713,6 +714,36 @@ func loadProfile(name string) (Profile, error) {
 		p.Name = name
 	}
 	return p, nil
+}
+
+// profileNameRe bounds a saveable profile name to a safe, path-traversal-proof
+// filename slug (lowercase letters, digits, dashes).
+var profileNameRe = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,40}$`)
+
+// saveProfile writes a config to profiles/bench/<name>.yaml (the GUI "Save as"
+// face). Validates the name as a safe slug, refuses to clobber an existing
+// profile unless overwrite is set, and marshals via the Profile yaml tags so
+// the saved file reads exactly like the hand-written presets.
+func saveProfile(p Profile, overwrite bool) error {
+	name := strings.ToLower(strings.TrimSpace(p.Name))
+	if !profileNameRe.MatchString(name) {
+		return fmt.Errorf("invalid name %q — use lowercase letters, digits and dashes (max 41 chars)", p.Name)
+	}
+	p.Name = name
+	path := filepath.Join(profileDir, name+".yaml")
+	if !overwrite {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("profile %q already exists", name)
+		}
+	}
+	out, err := yaml.Marshal(p)
+	if err != nil {
+		return fmt.Errorf("marshal profile: %w", err)
+	}
+	if err := os.MkdirAll(profileDir, 0o755); err != nil {
+		return fmt.Errorf("mkdir %s: %w", profileDir, err)
+	}
+	return os.WriteFile(path, out, 0o644)
 }
 
 // allProfiles returns every saved profile (for the GUI dropdown), name-sorted.

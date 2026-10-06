@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os/exec"
+	"strings"
 	"sync"
 	"time"
 )
@@ -52,6 +53,40 @@ func serveGUI(addr string) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(complexity(clampProfile(p)))
+	})
+
+	// /api/save (POST {config, save_name, save_desc, overwrite}) → persist the
+	// current config as profiles/bench/<name>.yaml so it joins the dropdown.
+	// 409 if the name exists and overwrite isn't set (the UI then confirms).
+	mux.HandleFunc("/api/save", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method != http.MethodPost {
+			http.Error(w, `{"error":"POST only"}`, http.StatusMethodNotAllowed)
+			return
+		}
+		var body struct {
+			Profile
+			SaveName  string `json:"save_name"`
+			SaveDesc  string `json:"save_desc"`
+			Overwrite bool   `json:"overwrite"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, `{"error":"bad config"}`, http.StatusBadRequest)
+			return
+		}
+		p := clampProfile(body.Profile)
+		p.Name = body.SaveName
+		p.Description = body.SaveDesc
+		if err := saveProfile(p, body.Overwrite); err != nil {
+			code := http.StatusBadRequest
+			if strings.Contains(err.Error(), "already exists") {
+				code = http.StatusConflict
+			}
+			msg, _ := json.Marshal(map[string]string{"error": err.Error()})
+			http.Error(w, string(msg), code)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "name": p.Name})
 	})
 
 	// /api/sweep (POST {config, field, values:[]}) → run the config once per
@@ -245,6 +280,7 @@ const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
   <button id="run" onclick="run()">Run</button>
   <button class="ghost" onclick="sample()">Show example data ▾</button>
+  <button class="ghost" onclick="saveAs()">💾 Save as profile…</button>
   <span style="flex:1"></span>
   <label style="font-size:11px;color:#94a3b8">Sweep</label>
   <select id="sweepField" style="width:auto">
@@ -296,15 +332,38 @@ function cfg(){return{
   stage_deals:stage_deals.checked,stage_identity:stage_identity.checked,stage_freq_cap:stage_freq_cap.checked,stage_budget:stage_budget.checked,
   separation:separation.checked,serial_io:serial_io.checked,
 };}
-async function init(){
-  profiles=await (await fetch('/api/profiles')).json();
+function renderProfiles(selectName){
   const sel=$('profile');
   sel.innerHTML=profiles.map((p,i)=>'<option value="'+i+'">'+p.name+' — '+(p.description||'')+'</option>').join('');
-  sel.onchange=fill;
+  if(selectName){const idx=profiles.findIndex(p=>p.name===selectName); if(idx>=0) sel.value=String(idx);}
+}
+async function fetchProfiles(selectName){
+  profiles=await (await fetch('/api/profiles')).json();
+  renderProfiles(selectName);
+}
+async function init(){
+  await fetchProfiles();
+  $('profile').onchange=fill;
   // Live cost profile: recompute (debounced) whenever any knob changes.
   document.querySelectorAll('.grid input,.grid select,#stage_deals,#stage_identity,#stage_freq_cap,#stage_budget,#separation,#serial_io')
     .forEach(el=>el.addEventListener('change',refreshCx));
   fill();
+}
+async function saveAs(){
+  const raw=prompt('Save current config as a profile.\nName (lowercase letters, digits, dashes):');
+  if(raw===null) return;
+  const name=raw.trim().toLowerCase();
+  if(!name){alert('name required');return;}
+  const desc=(prompt('Short description (optional):','')||'').trim();
+  let overwrite=false;
+  for(;;){
+    const body=Object.assign(cfg(),{save_name:name,save_desc:desc,overwrite:overwrite});
+    const resp=await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+    if(resp.ok){await fetchProfiles(name); fill(); alert('Saved profile "'+name+'" → profiles/bench/'+name+'.yaml'); return;}
+    let err='save failed'; try{err=(await resp.json()).error||err;}catch(e){}
+    if(resp.status===409){ if(confirm(err+'.\nOverwrite it?')){overwrite=true; continue;} return; }
+    alert(err); return;
+  }
 }
 let cxTimer=null;
 function refreshCx(){ clearTimeout(cxTimer); cxTimer=setTimeout(doRefreshCx,120); }
