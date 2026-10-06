@@ -1,0 +1,23 @@
+name: dooh-timeslot
+description: "SCENARIO: digital-out-of-home — timeslot auction, extreme targeting, deals + budget gate on. The place-based single-winner-per-slot path."
+campaigns: 300
+bids: 30
+targeting: extreme
+channel: dooh
+concurrency: 0        # GOMAXPROCS
+duration: 3s
+io_latency_ms: 2
+price_mode: first_price
+floor_price: 1.0
+slots: 1
+match_rate: 70
+creatives_per: 2
+slot_w: 0
+slot_h: 0
+separation: true
+shading: conservative
+stage_deals: true
+stage_identity: false
+stage_freq_cap: false
+stage_budget: true
+serial_io: false

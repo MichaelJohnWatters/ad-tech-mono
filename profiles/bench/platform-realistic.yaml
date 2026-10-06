@@ -1,0 +1,23 @@
+name: platform-realistic
+description: "SCENARIO: closest model to a live cycle — all Tier-3 stages on (deals/identity/freqcap/budget), 2ms async fan-out I/O, moderate shading + competitive separation."
+campaigns: 500
+bids: 40
+targeting: dense
+channel: display
+concurrency: 0        # GOMAXPROCS
+duration: 5s
+io_latency_ms: 2
+price_mode: first_price
+floor_price: 0.5
+slots: 1
+match_rate: 85
+creatives_per: 3
+slot_w: 300
+slot_h: 250
+separation: true
+shading: moderate
+stage_deals: true
+stage_identity: true
+stage_freq_cap: true
+stage_budget: true
+serial_io: false

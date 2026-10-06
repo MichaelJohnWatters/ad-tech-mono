@@ -1,0 +1,23 @@
+name: max-demand
+description: "SCENARIO: lots of demand — Redis stages on, 5ms async fan-out, 2000 concurrent workers. Overlapping I/O recovers throughput (flip serial_io ON to see the naive serial cost collapse it)."
+campaigns: 200
+bids: 25
+targeting: dense
+channel: display
+concurrency: 2000
+duration: 5s
+io_latency_ms: 5
+price_mode: first_price
+floor_price: 0.5
+slots: 1
+match_rate: 100
+creatives_per: 2
+slot_w: 300
+slot_h: 250
+separation: false
+shading: disabled
+stage_deals: false
+stage_identity: false
+stage_freq_cap: true
+stage_budget: true
+serial_io: false
