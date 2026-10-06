@@ -540,7 +540,7 @@ Capture for choices that don't have a single right answer and shouldn't be silen
 
 1. **What role do we play?** Three plausible positions, not mutually exclusive:
    - *(a) Bidder.* Other publishers' Prebid setups call us as one demand source among many. We expose a Prebid-compatible HTTP endpoint (OpenRTB 2.5/2.6 with Prebid extensions). Our exchange becomes the receiver of Prebid traffic. **Lowest cost, highest reach.**
-   - *(b) Host a Prebid Server.* Run our own Prebid Server instance for publishers who use us as their primary SSP. Acts as a single server-side header-bidding endpoint that fans out to many bidders (us + competitors). Closer to what a prior ad-tech employer/PubMatic do as "managed Prebid."
+   - *(b) Host a Prebid Server.* Run our own Prebid Server instance for publishers who use us as their primary SSP. Acts as a single server-side header-bidding endpoint that fans out to many bidders (us + competitors). Closer to what the big SSPs (PubMatic etc.) do as "managed Prebid."
    - *(c) Ship a Prebid.js adapter.* Write and contribute the canonical `ourPlatformBidAdapter.js` to the Prebid.js repo so publishers using stock Prebid.js can add us via config. Required if anyone is going to discover us via Prebid's prebid.org/dev-docs bidder list.
    
    (a) is table stakes; (b) is a product expansion; (c) is a distribution play. Most likely all three eventually, but pick a start.

@@ -72,7 +72,7 @@ Explorer.
    data went) → **CLICK the Trace Explorer link** → **SAY** *"every hop, zero
    slippage."*
 4. **CLICK** **Demos → Onboarding & Expansion → Run demo** → **SAY** *"this is my
-   a prior ad-tech employer domain — one email upload resolved across devices into an audience."*
+   professional domain — one email upload resolved across devices into an audience."*
    → walk before/after.
 5. *(if time)* **CLICK** **Demos → Billing → Run demo** → **SAY** *"every
    impression accrues spend + revenue, exactly once — money in = money out."*
