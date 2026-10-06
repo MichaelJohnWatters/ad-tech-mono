@@ -89,6 +89,33 @@ if [ "${1:-}" = "--profile" ]; then
   exit 0
 fi
 
+# --max: saturation run — drive the auction + bid compute flat-out across a
+# core sweep and report PEAK auctions/sec · bidreqs/sec. The "how many can we
+# get through" number for the pure compute. NOT platform rps: this deletes the
+# DSP fan-out / Redis / NATS / JSON-on-the-wire that actually bound the live
+# system (~180 rps on the VM). For real sustained rps use `make loadtest-ramp`.
+if [ "${1:-}" = "--max" ]; then
+  bt="${BENCH_MAX_TIME:-3s}"
+  cpus="${BENCH_MAX_CPUS:-1,2,4,8}"
+  echo "[bench] saturating auction + bid compute (ceiling, NOT platform rps) — cpu=$cpus benchtime=$bt"
+  out="$OUTDIR/.max.txt"
+  go test ./pkg/auction ./cmd/dsp -run '^$' -bench 'Throughput$' -benchtime="$bt" -cpu "$cpus" 2>&1 \
+    | grep -E 'Benchmark.*Throughput' | tee "$out" || true
+  echo
+  echo "[bench] PEAK compute throughput (higher = more headroom):"
+  awk '
+    /auctions\/sec/ { split($1,a,"-"); gsub(/[^0-9]/,"",a[2]); c=a[2]?a[2]:1;
+      for(i=1;i<=NF;i++) if($(i+1)=="auctions/sec"){v=$i} if(v>ab){ab=v;ac=c} }
+    /bidreqs\/sec/  { split($1,a,"-"); gsub(/[^0-9]/,"",a[2]); c=a[2]?a[2]:1;
+      for(i=1;i<=NF;i++) if($(i+1)=="bidreqs/sec"){v=$i} if(v>bb){bb=v;bc=c} }
+    END {
+      if(ab) printf "  auctions/sec : %d  (peak @ %s cores)\n", ab, ac
+      if(bb) printf "  bidreqs/sec  : %d  (peak @ %s cores)\n", bb, bc
+    }' "$out"
+  echo "  (compute ceiling — real sustained rps is I/O-bound; see make loadtest-ramp)"
+  exit 0
+fi
+
 if [ "${1:-}" = "--pin" ]; then
   echo "[bench] running + pinning baseline → $BASELINE"
   run_bench | tee "$BASELINE"
