@@ -14,6 +14,117 @@ request end-to-end with zero data slippage.
 
 ---
 
+## Highlights
+
+What makes this more than a toy — the hard problems, solved end-to-end:
+
+- **Traceable end-to-end, zero data slippage** — one `trace_id` flows from the SSP
+  through exchange → DSP → ad server → tracker → NATS → reporting; the staff **Trace
+  Explorer** renders every hop with timing.
+- **Exactly-once money** — a double-entry ledger sourced from a single
+  `AuctionWinEvent`, with reserve/settle for CPC/CPA/vCPM; load-tested
+  money-lossless (biz-key + `Nats-Msg-Id` dedup).
+- **Multi-tenant by construction** — Postgres **RLS** on every table + explicit
+  `account_id` filtering; a bare-pool query under the app role returns 0 rows.
+- **Real-time auctions** — first-price with **bid shading**, 5 strategies
+  (single / relevance-weighted / batch / timeslot / pod), a **SmartRouter** that
+  prunes slow/no-bid DSPs; gRPC on owned hot edges, OpenRTB on external boundaries.
+- **Hot-path discipline (the iron rule)** — the per-campaign bid loop does **zero
+  per-call network I/O**; budgets, caps and campaigns are warm in-process copies
+  kept fresh by background refreshers.
+- **Three-tier caching** — L1 in-process + L2 Redis + L3 Postgres, invalidated over NATS.
+- **CTV / video / audio** — server-side ad insertion (**SSAI**) with HMAC-signed
+  beacons, VAST / VMAP / DAAST, cache-first transcoding.
+- **Identity & privacy** — deterministic + probabilistic identity graph, consent
+  threaded through the whole chain, GDPR 3-level opt-out/purge, hashed-PII-only ingestion.
+- **Beyond serving** — data marketplace, conversion attribution
+  (click / view-through / cross-device), variable publisher rev-share, invoicing +
+  payouts, OIDC SSO, data residency.
+- **Runs the way prod does** — the same code path on k3s locally and in prod; S3
+  everywhere (Minio ↔ real S3); one Helm chart with per-env values.
+
+---
+
+## Architecture
+
+The synchronous serving spine is **SSP → Exchange → DSP → Ad Server → Tracker →
+Reporting**, with async events over NATS JetStream. (Renders on GitHub; the staff
+portal **Architecture** page has the full interactive C4 model — see below.)
+
+```mermaid
+graph TB
+    subgraph External
+        User[End User / Browser]
+        Portal[Advertiser / Publisher / Staff Portal]
+    end
+    subgraph Ingress
+        Traefik[Traefik - TLS Termination]
+    end
+    subgraph Services
+        Gateway[Gateway - Auth, API, Portal]
+        SSP[SSP - Inventory, Deals]
+        Exchange[Exchange - Auctions, DSP fan-out]
+        DSP[DSP - Targeting, Pacing, Shading]
+        AdServer[Ad Server - Creatives, Freq Caps]
+        Tracker[Tracker - Beacons]
+        Reporting[Reporting + Billing]
+        Pipeline[Pipeline - Ingest, Audience]
+        SSAI[SSAI + Transcoder]
+    end
+    subgraph Infrastructure
+        Postgres[(PostgreSQL - RLS)]
+        Redis[(Redis)]
+        NATS[NATS JetStream]
+        Minio[(Minio / S3 + Parquet lake)]
+        CH[(ClickHouse - analytics)]
+    end
+    subgraph Observability
+        Obs[Prometheus · Grafana · Loki · Jaeger]
+    end
+
+    User -->|pixels| Traefik
+    Portal --> Traefik
+    Traefik -->|/v1/api/*| Gateway
+    Traefik -->|/v1/t/*| Tracker
+    Traefik -->|/v1/openrtb/*| Exchange
+
+    Gateway -->|proxy| SSP
+    Gateway -->|proxy| DSP
+    Gateway -->|proxy| Reporting
+    Gateway -->|proxy| AdServer
+
+    SSP -->|gRPC internal| Exchange
+    Exchange -->|gRPC ours / OpenRTB 3rd-party| DSP
+    SSP -->|gRPC internal| AdServer
+    AdServer -->|signed pixel URLs| Tracker
+    SSAI --> Exchange
+
+    DSP --> Redis
+    DSP --> Postgres
+    SSP --> Postgres
+    AdServer --> Minio
+    AdServer --> Redis
+    SSAI --> Minio
+
+    Tracker --> NATS
+    Exchange --> NATS
+    DSP --> NATS
+    NATS --> Reporting
+    Reporting --> CH
+    Reporting --> Postgres
+    Reporting -->|hourly Parquet export| Minio
+    Pipeline --> Minio
+    Pipeline --> Postgres
+
+    Obs -.->|scrape / collect / query| Services
+```
+
+Two more generated diagrams — the **ad-request sequence**, the **NATS event flow**,
+and the **DB ER** model — live in [`docs/PLAN.md`](docs/PLAN.md); the interactive C4
+model is in the staff portal (below).
+
+---
+
 ## Running it
 
 The stack runs on **Rancher Desktop (k3s)** and deploys via the Helm chart
