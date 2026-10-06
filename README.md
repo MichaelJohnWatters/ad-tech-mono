@@ -8,6 +8,8 @@ customer/staff portal. Everything runs locally on Kubernetes (**Rancher Desktop
 k3s**, deployed via a Helm chart). The goal is full transparency: trace any ad
 request end-to-end with zero data slippage.
 
+📺 **[Watch the demo walkthrough →](https://youtu.be/LX_7pl26hVU)**
+
 - **Architecture source of truth:** [`docs/PLAN.md`](docs/PLAN.md) (123-step, 12-phase build plan)
 - **AI/context guide:** [`CLAUDE.md`](CLAUDE.md) (conventions) + per-directory `CLAUDE.md` files
 - **Where to click:** [`docs/DEMO-URLS.md`](docs/DEMO-URLS.md) (the full browsable URL map)
