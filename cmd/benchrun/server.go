@@ -323,6 +323,14 @@ const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
     <div><label>Memory limit (GOMEMLIMIT, MiB)</label><input id="mem_limit_mib" type="number" min="0" value="0">
       <div class="hint">0 = no soft heap ceiling (GC pressure if set low)</div></div>
   </div>
+  <div class="hint" style="margin-top:9px;line-height:1.55;color:#94a3b8">
+    ⚠ <b>Who gets this budget:</b> it covers the <b>whole benchrun process</b>, which is <b>both</b> the
+    <b>load generator</b> (the concurrent workers synthesising demand) <b>and</b> the <b>app-under-test</b>
+    (the auction + bid compute). They run in ONE process and <b>share</b> these cores/heap — there is no
+    separate budget for "the load tester" vs "the app". That's the opposite of the real stack, where the
+    load generator (simulator, on the host) and the apps (pods, each with their own CPU/mem requests &amp;
+    limits) are isolated. For true app-vs-load resource separation, use <code>make loadtest</code>.
+  </div>
 </div>
 
 <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -448,7 +456,7 @@ function renderDiagram(c,r){
   const mem=(c.mem_limit_mib>0?c.mem_limit_mib+' MiB':'unbounded');
   const strat=r.rows.find(x=>x.field==='Bids / auction');
   const stratTxt=(strat?strat.value.split('→')[1]||'':'').trim();
-  dgHead.innerHTML='<b>'+c.concurrency+'</b> concurrent workers · bounded to <b>'+cores+'</b> core(s) / <b>'+mem+'</b> heap · each worker repeats one cycle:';
+  dgHead.innerHTML='<b>'+c.concurrency+'</b> load-gen workers <b>+</b> the app-under-test (auction/bid compute) run in <b>ONE process</b>, sharing <b>'+cores+'</b> core(s) / <b>'+mem+'</b> heap (not isolated like stack pods). Each worker repeats one cycle:';
   const net=(c.stage_freq_cap?1:0)+(c.stage_budget?1:0);
   const ioTxt=net>0?(c.io_latency_ms>0?((c.serial_io?'serial ':'async ')+c.io_latency_ms+'ms'):'0ms (set I/O)'):'off';
   const tRow=r.rows.find(x=>x.field==='Targeting');
