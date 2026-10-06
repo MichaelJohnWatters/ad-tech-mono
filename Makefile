@@ -382,6 +382,12 @@ bench: ## Hot-path micro-benchmarks (cluster-free): run + diff vs docs/perf/benc
 bench-pin: ## Re-pin the micro-benchmark baseline (do deliberately after a known-good change; commit docs/perf/bench/baseline.txt in the same PR).
 	bash scripts/bench.sh --pin
 
+bench-run: ## Configurable compute load gen from a saved profile (profiles/bench/*.yaml). Dial campaigns/bids/targeting/channel/concurrency/duration; reports auctions/sec + p50/p95/p99. Usage: make bench-run PROFILE=big-world  (or ARGS='-campaigns 500 -concurrency 8 -duration 5s'). Stack down.
+	go run ./cmd/benchrun $(if $(PROFILE),-profile $(PROFILE),) $(ARGS)
+
+bench-run-list: ## List saved benchrun profiles.
+	go run ./cmd/benchrun -list
+
 bench-max: ## Saturation run — drive the auction + bid compute flat-out across a core sweep, report PEAK auctions/sec (compute ceiling, NOT platform rps — use loadtest-ramp for that). Stack must be down.
 	bash scripts/bench.sh --max
 

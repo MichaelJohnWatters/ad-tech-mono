@@ -1,0 +1,8 @@
+name: small
+description: Tiny book — a quick sanity cycle (10 campaigns, display).
+campaigns: 10
+bids: 10
+targeting: broad
+channel: display
+concurrency: 1
+duration: 2s

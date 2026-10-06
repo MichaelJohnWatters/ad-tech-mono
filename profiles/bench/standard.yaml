@@ -1,0 +1,8 @@
+name: standard
+description: The default serving shape — 200-campaign book, dense targeting, display.
+campaigns: 200
+bids: 25
+targeting: dense
+channel: display
+concurrency: 0   # GOMAXPROCS
+duration: 3s
