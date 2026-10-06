@@ -50,6 +50,12 @@ type Profile struct {
 	Channel     string `yaml:"channel" json:"channel"`         // display | retail
 	Concurrency int    `yaml:"concurrency" json:"concurrency"` // parallel workers (0 = GOMAXPROCS)
 	Duration    string `yaml:"duration" json:"duration"`       // run length, e.g. "3s"
+	// IOLatencyMs injects a per-cycle sleep to ILLUSTRATE how I/O latency
+	// collapses throughput (0 = pure compute ceiling). It is a teaching knob,
+	// NOT real I/O — see the note in the GUI / README. A real DSP fan-out /
+	// Redis / NATS round-trip is concurrent and contended; a fixed sleep only
+	// shows the first-order "waiting dominates" effect.
+	IOLatencyMs int `yaml:"io_latency_ms" json:"io_latency_ms"`
 }
 
 const profileDir = "profiles/bench"
@@ -138,9 +144,10 @@ type Result struct {
 // execute runs the compute loop for dur and returns the measured Result
 // (no printing — the CLI formats it, the web handler JSON-encodes it).
 func execute(p Profile, dur time.Duration) Result {
-	campaigns := buildCampaigns(p.Campaigns)
+	campaigns := buildCampaigns(p.Campaigns, p.Targeting)
 	req := buildRequest(p.Targeting, p.Channel)
 	engine := auction.NewEngine(clock.Real{})
+	ioLat := time.Duration(p.IOLatencyMs) * time.Millisecond
 
 	var ops int64
 	// Per-worker latency samples, bounded so recording never dominates memory
@@ -164,6 +171,9 @@ func execute(p Profile, dur time.Duration) Result {
 			for time.Now().Before(deadline) {
 				start := time.Now()
 				cycle(engine, campaigns, req, p.Channel, p.Bids)
+				if ioLat > 0 {
+					time.Sleep(ioLat) // illustrative I/O wait (see Profile.IOLatencyMs)
+				}
 				atomic.AddInt64(&ops, 1)
 				if len(lat[w]) < perWorkerCap {
 					lat[w] = append(lat[w], time.Since(start))
@@ -199,6 +209,14 @@ func execute(p Profile, dur time.Duration) Result {
 
 // cycle runs one request through the compute: bid loop → bids → auction.
 func cycle(engine *auction.Engine, campaigns []models.Campaign, req targeting.Request, channel string, bidCap int) {
+	bids := buildBids(campaigns, req, channel, bidCap)
+	_, _ = engine.RunAuction(nil, bids, auctionReqFor(channel))
+}
+
+// buildBids runs the DSP bid loop (creative-size match + targeting) over the
+// book and returns the eligible bids, capped at bidCap. Shared by cycle() and
+// the GUI's /api/sample so the preview matches exactly what gets run.
+func buildBids(campaigns []models.Campaign, req targeting.Request, channel string, bidCap int) []auction.Bid {
 	reqW, reqH := 300, 250
 	if channel != "display" {
 		reqW, reqH = 0, 0
@@ -225,12 +243,16 @@ func cycle(engine *auction.Engine, campaigns []models.Campaign, req targeting.Re
 			break
 		}
 	}
+	return bids
+}
+
+func auctionReqFor(channel string) auction.AuctionRequest {
 	ar := auction.AuctionRequest{Channel: channel, PriceMode: "first_price", FloorPrice: 0.50, TraceID: "benchrun"}
 	if channel == "retail" {
 		ar.SlotCount = 5
 		ar.RetailCategories = []string{"IAB18", "IAB18-5"}
 	}
-	_, _ = engine.RunAuction(nil, bids, ar)
+	return ar
 }
 
 func printResult(r Result) {
@@ -298,7 +320,11 @@ func listProfiles() {
 // buildCampaigns / buildRequest / selectCreative mirror the DSP bid loop's
 // inputs (kept local — cmd/dsp's fixture builders live in _test.go). Same
 // shape as cmd/dsp/bench_test.go's makeBenchCampaigns.
-func buildCampaigns(n int) []models.Campaign {
+// buildCampaigns builds a synthetic DSP book. `depth` controls how many
+// targeting DIMENSIONS each campaign gates on — the real driver of
+// targeting.Evaluate cost — from none (match-all) up to extreme (every
+// dimension). The request from buildRequest carries matching signals.
+func buildCampaigns(n int, depth string) []models.Campaign {
 	out := make([]models.Campaign, n)
 	geos := []string{"USA", "GBR", "CAN", "AUS"}
 	for i := 0; i < n; i++ {
@@ -307,7 +333,32 @@ func buildCampaigns(n int) []models.Campaign {
 		case 0:
 			segs = []string{"auto_intenders"}
 		case 1:
-			segs = []string{"luxury_watch_intent"}
+			segs = []string{"luxury_watch_intent"} // request lacks this → no-match path
+		}
+		inc := targeting.TargetingSet{}
+		exc := targeting.TargetingSet{}
+		switch depth {
+		case "none":
+			// match-all — fastest Evaluate (no inclusions to check)
+		case "broad":
+			inc.Geo = []string{geos[i%len(geos)]}
+			inc.Device = []string{"mobile", "desktop"}
+		case "extreme":
+			inc.Geo = []string{geos[i%len(geos)]}
+			inc.Device = []string{"mobile", "desktop", "ctv"}
+			inc.Segments = segs
+			inc.Categories = []string{"IAB1", "IAB17"}
+			inc.Keywords = []string{"ev", "sedan", "lease", "suv"}
+			inc.OS = []string{"iOS", "Android"}
+			inc.InventoryType = []string{"site", "app"}
+			inc.Domains = []string{"demo-news.example", "sports.example"}
+			exc.Categories = []string{"IAB7", "IAB25"}
+		default: // "dense"
+			inc.Geo = []string{geos[i%len(geos)]}
+			inc.Device = []string{"mobile", "desktop"}
+			inc.Segments = segs
+			inc.Categories = []string{"IAB1", "IAB17"}
+			exc.Categories = []string{"IAB7"}
 		}
 		out[i] = models.Campaign{
 			ID:         fmt.Sprintf("li-%d", i),
@@ -317,33 +368,138 @@ func buildCampaigns(n int) []models.Campaign {
 				{ID: fmt.Sprintf("cr-%d-mpu", i), Format: "display", Width: 300, Height: 250},
 				{ID: fmt.Sprintf("cr-%d-lead", i), Format: "display", Width: 728, Height: 90},
 			},
-			BaseBid: 2.0 + float64(i%40)/10.0,
-			Format:  "display",
-			Status:  "live",
-			Targeting: targeting.Rules{
-				Include: targeting.TargetingSet{
-					Geo: []string{geos[i%len(geos)]}, Device: []string{"mobile", "desktop"}, Segments: segs,
-				},
-				Exclude: targeting.TargetingSet{Categories: []string{"IAB7"}},
-			},
+			BaseBid:   2.0 + float64(i%40)/10.0,
+			Format:    "display",
+			Status:    "live",
+			Targeting: targeting.Rules{Include: inc, Exclude: exc},
 		}
 	}
 	return out
 }
 
-func buildRequest(density, channel string) targeting.Request {
+// buildRequest carries the request-side signals matching the depth level, so
+// campaigns actually match (and the deeper levels exercise more dimensions).
+func buildRequest(depth, channel string) targeting.Request {
 	r := targeting.Request{Geo: "USA", Device: "mobile", Channel: channel}
-	if channel != "display" {
+	if channel != "display" && channel != "native" {
 		r.Device = "ctv"
 	}
-	if density == "dense" {
+	switch depth {
+	case "none", "broad":
+		// geo/device only
+	case "extreme":
 		r.OS = "iOS"
 		r.Segments = []string{"sports_fans", "auto_intenders", "in_market_auto"}
 		r.Categories = []string{"IAB1", "IAB17", "IAB3"}
 		r.Keywords = []string{"ev", "sedan", "lease"}
 		r.Domain = "demo-news.example"
+		r.InventoryType = "site"
+	default: // dense
+		r.OS = "iOS"
+		r.Segments = []string{"sports_fans", "auto_intenders", "in_market_auto"}
+		r.Categories = []string{"IAB1", "IAB17", "IAB3"}
 	}
 	return r
+}
+
+// SampleData previews what a given config generates — shown in the GUI so you
+// can see the campaigns, request signals, and resulting bids before running.
+type SampleData struct {
+	Request    targeting.Request `json:"request"`
+	AuctionReq struct {
+		Channel          string   `json:"channel"`
+		Strategy         string   `json:"strategy"`
+		SlotCount        int      `json:"slot_count,omitempty"`
+		RetailCategories []string `json:"retail_categories,omitempty"`
+		PriceMode        string   `json:"price_mode"`
+	} `json:"auction_request"`
+	Campaigns []sampleCampaign `json:"campaigns"`
+	Bids      []sampleBid      `json:"bids"`
+	TotalBids int              `json:"eligible_bids_of_book"`
+	BookSize  int              `json:"book_size"`
+}
+
+type sampleCampaign struct {
+	ID                string   `json:"id"`
+	Advertiser        string   `json:"advertiser"`
+	BaseBid           float64  `json:"base_bid"`
+	IncludeGeo        []string `json:"include_geo,omitempty"`
+	IncludeDevice     []string `json:"include_device,omitempty"`
+	IncludeSegments   []string `json:"include_segments,omitempty"`
+	IncludeCategories []string `json:"include_categories,omitempty"`
+	ExcludeCategories []string `json:"exclude_categories,omitempty"`
+	Creatives         []string `json:"creatives"`
+}
+
+type sampleBid struct {
+	CampaignID string  `json:"campaign_id"`
+	Advertiser string  `json:"advertiser"`
+	Price      float64 `json:"price"`
+	Category   string  `json:"category,omitempty"`
+	Relevance  float64 `json:"relevance,omitempty"`
+}
+
+// buildSample produces a small, representative preview for the GUI: the first
+// few campaigns, the request, the auction shape, and the first few eligible
+// bids — all from the SAME builders a real run uses.
+func buildSample(p Profile) SampleData {
+	showN := 12 // build enough to show both matching + non-matching + a few bids
+	if p.Campaigns < showN {
+		showN = p.Campaigns
+	}
+	campaigns := buildCampaigns(showN, p.Targeting)
+	req := buildRequest(p.Targeting, p.Channel)
+	bids := buildBids(campaigns, req, p.Channel, p.Bids)
+	ar := auctionReqFor(p.Channel)
+
+	var sd SampleData
+	sd.Request = req
+	sd.AuctionReq.Channel = ar.Channel
+	sd.AuctionReq.Strategy = strategyName(p.Channel)
+	sd.AuctionReq.SlotCount = ar.SlotCount
+	sd.AuctionReq.RetailCategories = ar.RetailCategories
+	sd.AuctionReq.PriceMode = ar.PriceMode
+	sd.BookSize = p.Campaigns
+	sd.TotalBids = len(bids)
+	for i := range campaigns {
+		if i >= 3 {
+			break
+		}
+		c := campaigns[i]
+		crs := make([]string, 0, len(c.Creatives))
+		for _, cr := range c.Creatives {
+			crs = append(crs, fmt.Sprintf("%s %dx%d", cr.ID, cr.Width, cr.Height))
+		}
+		sd.Campaigns = append(sd.Campaigns, sampleCampaign{
+			ID: c.ID, Advertiser: c.AccountID, BaseBid: c.BaseBid,
+			IncludeGeo: c.Targeting.Include.Geo, IncludeDevice: c.Targeting.Include.Device,
+			IncludeSegments: c.Targeting.Include.Segments, IncludeCategories: c.Targeting.Include.Categories,
+			ExcludeCategories: c.Targeting.Exclude.Categories, Creatives: crs,
+		})
+	}
+	for i := range bids {
+		if i >= 3 {
+			break
+		}
+		b := bids[i]
+		sd.Bids = append(sd.Bids, sampleBid{
+			CampaignID: b.CampaignID, Advertiser: b.AdvertiserID, Price: b.Price,
+			Category: b.Category, Relevance: b.Relevance,
+		})
+	}
+	return sd
+}
+
+// strategyName reports which auction strategy a channel selects (for the preview).
+func strategyName(channel string) string {
+	switch channel {
+	case "retail":
+		return "relevance_weighted (multi-winner)"
+	case "dooh":
+		return "timeslot → single_winner"
+	default:
+		return "single_winner (first-price)"
+	}
 }
 
 // selectCreative is a local copy of the DSP's size-match rule (cmd/dsp's lives
