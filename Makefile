@@ -382,6 +382,9 @@ bench: ## Hot-path micro-benchmarks (cluster-free): run + diff vs docs/perf/benc
 bench-pin: ## Re-pin the micro-benchmark baseline (do deliberately after a known-good change; commit docs/perf/bench/baseline.txt in the same PR).
 	bash scripts/bench.sh --pin
 
+bench-max: ## Saturation run — drive the auction + bid compute flat-out across a core sweep, report PEAK auctions/sec (compute ceiling, NOT platform rps — use loadtest-ramp for that). Stack must be down.
+	bash scripts/bench.sh --max
+
 bench-profile: ## Profile ONE hot-path bench (CPU+mem) and print top hotspots — the "where" after bench flags a regression. Usage: make bench-profile BENCH=BenchmarkExchangeAuction PKG=./pkg/auction
 	bash scripts/bench.sh --profile "$(BENCH)" "$(PKG)"
 
