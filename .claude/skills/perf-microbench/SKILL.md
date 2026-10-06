@@ -80,10 +80,16 @@ run saturates the cores) and inputs are clamped. Host-only, like
 - **targeting depth** (none/broad/dense/extreme — controls how many dimensions
   each campaign gates on, the real Evaluate-cost lever) and **channel**
   (display/video/audio/native/retail/dooh → the auction strategy),
-- a **simulated-I/O (ms/cycle)** knob — a per-cycle sleep that ILLUSTRATES how
-  waiting collapses throughput (0ms→~150k/sec, 5ms→~1.4k/sec). Teaching aid,
-  not real I/O: a real DSP fan-out / Redis / NATS round-trip is concurrent and
-  contended. For true sustained rps use `make loadtest-ramp` on the stack.
+- a **simulated-I/O (ms/cycle)** knob + **async fan-out** model — the enabled
+  Tier-3 network stages (freqcap/budget Redis round-trips) each cost `io` ms,
+  and by default fire CONCURRENTLY (goroutine per stage, wait for all) so the
+  per-cycle I/O cost ≈ the SLOWEST dependency, not the sum — modeling the real
+  exchange's concurrent fan-out. The `serial_io` toggle contrasts the naive sum
+  (async 2 stages @5ms, c=50 → ~8.8k/sec vs serial ~4.5k/sec). Under simulated
+  I/O, crank **concurrency** to recover throughput — parked workers overlap
+  their waits (async io=5ms: c=12→2.1k, 100→18.6k, 500→72k, until compute
+  saturates). Still a model, not real I/O (no contention/queueing); for true
+  sustained rps use `make loadtest-ramp` on the stack.
 
 Saved profiles: `small` (sanity), `standard` (200-campaign display), `big-world`
 (2000-campaign stress), `retail` (relevance-weighted multi-winner), `broad`
