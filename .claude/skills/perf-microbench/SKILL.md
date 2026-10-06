@@ -73,7 +73,17 @@ The GUI (`-serve`) is the same tool with a browser front end — pick a profile
 from the dropdown (autofills the knobs), tweak, Run, read auctions/sec +
 p50/p95/p99. Runs are serialized (a second concurrent run gets 429, since a
 run saturates the cores) and inputs are clamped. Host-only, like
-`cmd/devconsole`.
+`cmd/devconsole`. It also has:
+- a **"What's being tested"** panel (the cycle flow + what is/isn't covered),
+- **"Show example data"** → `/api/sample` previews the campaigns, request
+  signals, and resulting bids a config generates (so you see the world),
+- **targeting depth** (none/broad/dense/extreme — controls how many dimensions
+  each campaign gates on, the real Evaluate-cost lever) and **channel**
+  (display/video/audio/native/retail/dooh → the auction strategy),
+- a **simulated-I/O (ms/cycle)** knob — a per-cycle sleep that ILLUSTRATES how
+  waiting collapses throughput (0ms→~150k/sec, 5ms→~1.4k/sec). Teaching aid,
+  not real I/O: a real DSP fan-out / Redis / NATS round-trip is concurrent and
+  contended. For true sustained rps use `make loadtest-ramp` on the stack.
 
 Saved profiles: `small` (sanity), `standard` (200-campaign display), `big-world`
 (2000-campaign stress), `retail` (relevance-weighted multi-winner), `broad`
