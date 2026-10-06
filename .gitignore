@@ -115,3 +115,6 @@ docs/perf/bench/.last.txt
 docs/perf/bench/profiles/
 docs/perf/bench/history/
 docs/perf/bench/.max.txt
+
+# stray binary from `go build ./cmd/benchrun/` (build to /tmp instead)
+/benchrun
