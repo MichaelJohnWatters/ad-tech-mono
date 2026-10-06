@@ -222,7 +222,7 @@ func complexity(p Profile) ComplexityReport {
 			simIO = fmt.Sprintf("%dms (serial: %d stages × %dms)", netStages*p.IOLatencyMs, netStages, p.IOLatencyMs)
 			ioWeight = "extreme"
 		} else {
-			simIO = fmt.Sprintf("%dms (async fan-out: %d stages overlap ≈ slowest)", p.IOLatencyMs, netStages)
+			simIO = fmt.Sprintf("%dms (async fan-out: %d %s overlap ≈ slowest)", p.IOLatencyMs, netStages, plural(netStages, "stage", "stages"))
 			ioWeight = "heavy"
 		}
 		rows = append(rows, complexityRow{
@@ -270,6 +270,13 @@ func strategyShort(channel string) string {
 	default:
 		return "single-winner"
 	}
+}
+
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 func joinComma(ss []string) string {

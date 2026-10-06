@@ -91,10 +91,18 @@ run saturates the cores) and inputs are clamped. Host-only, like
   saturates). Still a model, not real I/O (no contention/queueing); for true
   sustained rps use `make loadtest-ramp` on the stack.
 
-Saved profiles: `small` (sanity), `standard` (200-campaign display), `big-world`
-(2000-campaign stress), `retail` (relevance-weighted multi-winner), `broad`
-(cheap-match). Add one by dropping a YAML in `profiles/bench/`. Any flag
-overrides the profile. Same compute-ceiling caveat as below — not platform rps.
+Saved profiles come in two kinds. **World-shape** presets set the core knobs
+only (the rest default): `small` (sanity), `standard` (200-campaign display),
+`big-world` (2000-campaign stress), `retail` (relevance-weighted multi-winner),
+`broad` (cheap-match). **SCENARIO** presets set EVERY knob (incl. Tier-3 stages
++ async I/O) for a coherent regime — true one-click global configs:
+`compute-ceiling` (pure math, no I/O/stages), `platform-realistic` (all Tier-3
+on + 2ms async I/O — closest to a live cycle), `max-demand` (Redis stages,
+5ms async fan-out, 2000 workers — the lots-of-demand showcase), `dooh-timeslot`
+(timeslot auction, extreme targeting). Switching profiles fully resets all
+fields, so partial + complete presets mix safely. Add one by dropping a YAML in
+`profiles/bench/`; any flag overrides the profile. Same compute-ceiling caveat
+as below — not platform rps.
 
 ## "How many auctions/sec can the compute do?" (the ceiling, not platform rps)
 

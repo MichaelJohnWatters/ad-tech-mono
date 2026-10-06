@@ -1,0 +1,23 @@
+name: compute-ceiling
+description: "SCENARIO: pure compute ceiling — no I/O, no platform stages. How many auctions/sec the auction+bid MATH alone can do. Crank concurrency."
+campaigns: 2000
+bids: 50
+targeting: dense
+channel: display
+concurrency: 0        # GOMAXPROCS
+duration: 5s
+io_latency_ms: 0
+price_mode: first_price
+floor_price: 0.5
+slots: 1
+match_rate: 100
+creatives_per: 2
+slot_w: 300
+slot_h: 250
+separation: false
+shading: disabled
+stage_deals: false
+stage_identity: false
+stage_freq_cap: false
+stage_budget: false
+serial_io: false
