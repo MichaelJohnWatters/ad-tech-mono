@@ -214,7 +214,9 @@ const guiHTML = `<!doctype html><html><head><meta charset="utf-8">
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="stage_freq_cap"> Freq cap (sim Redis)</label>
       <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="stage_budget"> Budget gate (sim Redis)</label>
       <label style="display:flex;gap:6px;align-items:center" title="Real auction option (not Tier-3): one advertiser/category per page"><input type="checkbox" id="separation"> Competitive separation</label>
+      <label style="display:flex;gap:6px;align-items:center" title="Off (default) = async fan-out: the simulated stages overlap, cost ≈ the slowest. On = naive serial sum."><input type="checkbox" id="serial_io"> Serial I/O (off = async fan-out)</label>
     </div>
+    <div class="hint" style="margin-top:6px">Async fan-out (default): the auction fires its dependencies concurrently and waits for the slowest — so enabling 1 or 3 network stages costs ≈ one round-trip. Flip "Serial I/O" to see the naive sum and why async matters.</div>
   </div>
 </details>
 
@@ -263,7 +265,7 @@ function cfg(){return{
   price_mode:price_mode.value,floor_price:+floor_price.value,slots:+slots.value,match_rate:+match_rate.value,
   creatives_per:+creatives_per.value,slot_w:+slot_w.value,slot_h:+slot_h.value,shading:shading.value,
   stage_deals:stage_deals.checked,stage_identity:stage_identity.checked,stage_freq_cap:stage_freq_cap.checked,stage_budget:stage_budget.checked,
-  separation:separation.checked,
+  separation:separation.checked,serial_io:serial_io.checked,
 };}
 async function init(){
   profiles=await (await fetch('/api/profiles')).json();
@@ -283,7 +285,7 @@ function fill(){
   shading.value=p.shading||'disabled';
   stage_deals.checked=!!p.stage_deals; stage_identity.checked=!!p.stage_identity;
   stage_freq_cap.checked=!!p.stage_freq_cap; stage_budget.checked=!!p.stage_budget;
-  separation.checked=!!p.separation;
+  separation.checked=!!p.separation; serial_io.checked=!!p.serial_io;
 }
 async function runSweep(){
   const field=$('sweepField').value; if(!field){alert('pick a sweep dimension');return;}

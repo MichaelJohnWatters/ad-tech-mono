@@ -83,6 +83,14 @@ type Profile struct {
 	StageIdentity bool `yaml:"stage_identity" json:"stage_identity"` // identity-graph expansion for private segments (CPU-real)
 	StageFreqCap  bool `yaml:"stage_freq_cap" json:"stage_freq_cap"` // per-user/household frequency cap (Redis — simulated)
 	StageBudget   bool `yaml:"stage_budget" json:"stage_budget"`     // budget/balance gate (Redis — simulated)
+
+	// SerialIO picks how the simulated network stages wait. The live platform
+	// fans out CONCURRENTLY and blocks on the SLOWEST dependency, so the
+	// faithful model (default, SerialIO=false) overlaps them → one round-trip
+	// of IOLatencyMs regardless of how many stages are on. SerialIO=true adds
+	// them up (the naive serial worst-case) — useful only to contrast "why
+	// async matters".
+	SerialIO bool `yaml:"serial_io" json:"serial_io"`
 }
 
 const profileDir = "profiles/bench"
@@ -104,6 +112,7 @@ func main() {
 		creatives   = flag.Int("creatives", 0, "override: creative variants per campaign")
 		shadingF    = flag.String("shading", "", "override: disabled|conservative|moderate|aggressive")
 		separationF = flag.Bool("separation", false, "override: apply competitive separation before the auction")
+		serialIOF   = flag.Bool("serial-io", false, "override: add network stages serially (off = async fan-out, wait ≈ slowest)")
 		sIO         = flag.Int("io", -1, "override: simulated I/O ms per network stage")
 		sweepSpec   = flag.String("sweep", "", "sweep one field over values, e.g. campaigns=100,500,1000 or io=0,1,5")
 		stDeals     = flag.Bool("stage-deals", false, "Tier-3 (modeled): deal match before auction")
@@ -155,6 +164,9 @@ func main() {
 	}
 	if *separationF {
 		p.Separation = true
+	}
+	if *serialIOF {
+		p.SerialIO = true
 	}
 	if *sIO >= 0 {
 		p.IOLatencyMs = *sIO
@@ -211,7 +223,11 @@ func normalize(p Profile) Profile {
 	if p.Bids <= 0 || p.Bids > 4096 {
 		p.Bids = 25
 	}
-	if p.Concurrency <= 0 || p.Concurrency > 256 {
+	// 0 → GOMAXPROCS. High concurrency is legitimate for "lots of demand"
+	// (workers mostly parked on simulated I/O overlap their waits — that's the
+	// async-fan-out point), so allow up to 50k goroutines; only a wild value
+	// falls back to GOMAXPROCS.
+	if p.Concurrency <= 0 || p.Concurrency > 50_000 {
 		p.Concurrency = runtime.GOMAXPROCS(0)
 	}
 	switch p.Targeting {
@@ -404,6 +420,7 @@ type runCtx struct {
 	graph         map[string][]string
 	ioLat         time.Duration // one simulated network round-trip
 	netStages     int           // enabled Redis-bound stages (freq cap + budget)
+	serialIO      bool          // true = add stage waits serially; false (default) = concurrent fan-out (wait ≈ slowest)
 }
 
 func newRunCtx(p Profile) *runCtx {
@@ -420,7 +437,8 @@ func newRunCtx(p Profile) *runCtx {
 		floor:      p.FloorPrice,
 		separation: p.Separation,
 		stageDeals: p.StageDeals, stageIdentity: p.StageIdentity,
-		ioLat: time.Duration(p.IOLatencyMs) * time.Millisecond,
+		ioLat:    time.Duration(p.IOLatencyMs) * time.Millisecond,
+		serialIO: p.SerialIO,
 	}
 	if rc.shading != "" && rc.shading != "disabled" {
 		rc.curve = seededCurve() // a warm win-rate curve so ShadedBid does real work
@@ -447,7 +465,13 @@ func execute(p Profile, dur time.Duration) Result {
 	// Per-worker latency samples, bounded so recording never dominates memory
 	// or pollutes allocs; beyond the cap a worker keeps counting but stops
 	// sampling (the rate stays accurate; the histogram is a large sample).
-	const perWorkerCap = 500_000
+	// Bound TOTAL latency samples (~1M ≈ 8MB), not per-worker — else high
+	// concurrency preallocates gigabytes of buffers and the tool GC-thrashes
+	// itself into reporting garbage (the "500 workers collapsed" bug).
+	perWorkerCap := 1_000_000 / p.Concurrency
+	if perWorkerCap < 1000 {
+		perWorkerCap = 1000
+	}
 	lat := make([][]time.Duration, p.Concurrency)
 
 	var memBefore, memAfter runtime.MemStats
@@ -513,11 +537,22 @@ func cycle(rc *runCtx) {
 		bids = auction.FilterBidsWithSeparation(bids, auction.NewSeparationContext())
 	}
 	_, _ = rc.engine.RunAuction(nil, bids, rc.auctionReq)
-	// Redis-bound stages (freq cap, budget) modeled as one simulated round-trip
-	// each. Concurrent + contended in reality — this is a serial worst-case
-	// approximation; see loadtest-ramp for the truth.
+	// Simulated network stages. The real auction fires these CONCURRENTLY and
+	// blocks on the slowest (async fan-out) — the default models that: spawn a
+	// goroutine per stage, wait for all, so the cost ≈ one round-trip no matter
+	// how many stages are on. serialIO=true adds them up (naive worst-case) to
+	// contrast why async matters.
 	if rc.netStages > 0 && rc.ioLat > 0 {
-		time.Sleep(time.Duration(rc.netStages) * rc.ioLat)
+		if rc.serialIO {
+			time.Sleep(time.Duration(rc.netStages) * rc.ioLat)
+		} else {
+			var wg sync.WaitGroup
+			wg.Add(rc.netStages)
+			for s := 0; s < rc.netStages; s++ {
+				go func() { defer wg.Done(); time.Sleep(rc.ioLat) }()
+			}
+			wg.Wait()
+		}
 	}
 }
 
