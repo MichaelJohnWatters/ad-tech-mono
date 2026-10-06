@@ -2,495 +2,245 @@
 
 [![ci](https://github.com/MichaelJohnWatters/ad-tech-mono/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MichaelJohnWatters/ad-tech-mono/actions/workflows/ci.yml)
 
-A full-stack programmatic advertising platform in a single Go monorepo. Every component - from bid request to impression tracking to analytics - runs locally on K8s (Colima + k3s). The goal is full transparency: trace any ad request end-to-end with zero data slippage.
+A full-stack programmatic advertising platform in a single Go monorepo — SSP,
+exchange, DSP, ad server, tracker, reporting, billing, data pipeline, and the
+customer/staff portal. Everything runs locally on Kubernetes (**Rancher Desktop
+k3s**, deployed via a Helm chart). The goal is full transparency: trace any ad
+request end-to-end with zero data slippage.
 
-## Browsing & diagrams
+- **Architecture source of truth:** [`docs/PLAN.md`](docs/PLAN.md) (123-step, 12-phase build plan)
+- **AI/context guide:** [`CLAUDE.md`](CLAUDE.md) (conventions) + per-directory `CLAUDE.md` files
+- **Where to click:** [`docs/DEMO-URLS.md`](docs/DEMO-URLS.md) (the full browsable URL map)
 
-- **Where to click:** [`docs/DEMO-URLS.md`](docs/DEMO-URLS.md) — the portal, the six
-  branded demo publisher sites, the demo advertiser, and platform services, all on
-  nice `*.adtech.local` domains (run `make hosts` once), plus the `make demo-forward`
-  localhost map.
-- **Architecture diagrams (C4 model):** the staff portal **Architecture** page
-  (`https://gateway.adtech.local` → log in as staff → Architecture) renders the Context /
-  Containers / per-service Component views. Source is the one C4 model in
-  [`docs/diagrams/workspace.dsl`](docs/diagrams/workspace.dsl); `make c4` re-exports
-  the rendered Mermaid into `web/static/diagrams/`.
+---
 
-## Architecture
+## Running it
 
-```
-Browser/Publisher -> Gateway (:8080) -> Exchange (:8081) -> DSP (:8082)
-                                                         -> Ad Server (:8085)
-                                        Tracker (:8083) -> NATS JetStream
-                                                         -> Reporting (:8086)
+The stack runs on **Rancher Desktop (k3s)** and deploys via the Helm chart
+`k8s/helm/adtech`. There is no Tilt and no Colima — the whole dev loop is the
+Makefile.
 
-Infrastructure (K8s): Postgres | NATS (3-node) | Redis | Minio (S3)
-```
-
-**8 services**, **20 packages**, **130+ tests**, all in Go.
-
-## Prerequisites
+### Prerequisites
 
 - Go 1.23+
-- Docker
-- Colima (`brew install colima`)
-- kubectl (`brew install kubectl`)
-- Tilt (`brew install tilt`)
+- [Rancher Desktop](https://rancherdesktop.io/) (provides k3s + the `docker`/`nerdctl` runtime)
+- `kubectl` + `helm`
+- `make setup` installs the prerequisites and starts local k3s for you.
 
-Or run the setup script:
-
-```bash
-./scripts/setup.sh
-```
-
-## Quick Start
-
-### 1. Start Everything
+### Bring the stack up
 
 ```bash
-tilt up
+make stack-up        # build images + helm upgrade --install + run migrations
+make hosts           # ONE-TIME (sudo): map every *.adtech.local host → local Traefik in /etc/hosts
+make demo-warm       # non-destructive: seed + warm caches + SSAI content → fully browsable (no traffic)
 ```
 
-This starts all K8s infra (Postgres, NATS 3-node cluster, Redis, Minio) and builds + runs all 8 services. Open http://localhost:10350 for the Tilt dashboard.
+That's it — open **https://adtech.local** and log in. Other everyday commands:
 
-Lite mode (no observability stack):
-
-```bash
-PROFILE=lite tilt up
-```
-
-Container mode (Docker builds into K8s, same as CI/staging/prod):
-
-```bash
-DEV_MODE=container tilt up
-```
-
-### 2. Run Your First Auction
-
-```bash
-go run ./cmd/simulator single --geo GBR --device mobile
-```
-
-This sends a bid request to the Exchange, which fans out to the DSP, runs a first-price auction, and returns the winner. You'll see structured JSON logs from every service.
-
-### 3. Check Services Are Healthy
-
-```bash
-curl http://localhost:8080/healthz   # gateway
-curl http://localhost:8081/healthz   # exchange
-curl http://localhost:8082/healthz   # dsp
-curl http://localhost:8083/healthz   # tracker
-curl http://localhost:8086/healthz   # reporting
-```
-
-## Services
-
-| Service | Port | What it does |
-|---|---|---|
-| **Gateway** | 8080 | Dashboard, publisher simulator, trace explorer, API entry point |
-| **Exchange** | 8081 | Receives bid requests, fans out to DSPs, runs first-price auctions |
-| **DSP** | 8082 | Evaluates bids using targeting (11 dimensions) + pacing + bid modifiers |
-| **Tracker** | 8083 | Impression/click/conversion/viewability pixels (browser-facing) |
-| **SSP** | 8084 | Publisher inventory management |
-| **Ad Server** | 8085 | Creative serving |
-| **Reporting** | 8086 | NATS event consumer, analytics store, query API |
-| **Pipeline** | 8087 | Data pipeline: ingest, validate, normalise, enrich publisher files |
-
-## Developer Tools
-
-### Publisher Simulator
-
-http://localhost:8080/dev/publisher-simulator
-
-A simulated publisher page that runs real auctions. You'll see:
-- The ad rendered on a fake news page
-- A debug overlay showing trace ID, auction result, pixel firing status
-- Links to trace each request
-
-### Trace Explorer
-
-http://localhost:8080/dev/trace-explorer
-
-Trace a single ad request through the entire system. Two ways to use it:
-
-1. **Paste a trace ID** from your logs and click "Trace"
-2. **Click "Fire Single Request"** to run a live auction and see every hop
-
-Shows the full flow with timing: Exchange -> DSP -> Ad Server -> Browser -> Tracker -> NATS -> Reporting -> Billing.
-
-### Grafana Dashboards
-
-http://localhost:3000 (when observability stack is running)
-
-Three pre-built dashboards:
-- **Pipeline Health** - auction rate, latency, bid rate, fill rate, NATS lag, error rate, revenue
-- **Service Detail** - per-service request rate, latency percentiles, memory, goroutines, logs
-- **Trace Explorer** - Jaeger span waterfall + Loki log timeline for a given trace ID
-
-### Tilt Dashboard
-
-http://localhost:10350
-
-Shows build status, logs, and health for all services. Manual trigger buttons for:
-
-| Button | What it does |
+| Command | What it does |
 |---|---|
-| seed-minimal | Load minimal seed data |
-| seed-standard | Load standard seed data |
-| migrate | Run database migrations |
-| reset | Reset DB + migrate + seed |
-| sim-single | Fire one auction |
-| sim-trickle | 1 req/sec for 2 min |
-| sim-steady | 10 req/sec for 5 min |
-| sim-burst | 100 req/sec for 1 min |
-| chaos-kill-redis | Kill Redis pod (test resilience) |
-| chaos-kill-nats | Kill NATS pod (test resilience) |
-| test-unit | Run `go test ./pkg/...` |
-| test-e2e | Run e2e smoke test |
+| `make stack-up` | Deploy/upgrade the full stack (builds images first) + migrate |
+| `make deploy SVC=dsp` | Rebuild **one** service image and restart it (the fast inner loop) |
+| `make hosts` | Point all `*.adtech.local` domains at the local ingress (`/etc/hosts`, idempotent, sudo) |
+| `make demo-warm` | Seed (UPSERT) + warm caches + SSAI content — makes an up stack fully browsable, **no wipe, no traffic** |
+| `make reset` | **Wipe** all three stores (Postgres + ClickHouse + Redis) and re-seed — a clean slate |
+| `make demo` | One-command rich setup: seed + baseline traffic |
+| `make stack-doctor` | Diagnose/repair a wedged stack (post-sleep tunnels, node-IP flip, svclb) — the **first move** if it looks dead |
+| `make stack-down` | Tear the stack down (keeps data PVCs; `PURGE=1` wipes them) |
+| `make devconsole` | Host dev-loop UI (build/deploy buttons) at http://localhost:8099 |
 
-## Traffic Simulation
+> First load of an `https://*.adtech.local` site shows a one-time self-signed-cert
+> warning — click through it. Full command reference lives in `k8s/CLAUDE.md`.
+
+---
+
+## URLs — where to click
+
+All hostnames resolve to the local Traefik ingress **after `make hosts`** (writes
+a managed block to `/etc/hosts`). No port-forward is needed to *browse*; `localhost`
+ports are only for host CLI tools / e2e and require `make demo-forward`.
+
+### Portal + the showcase
+
+| URL | What |
+|---|---|
+| **https://adtech.local** | The portal (one gateway; advertiser / publisher / staff / ops views depend on who you log in as). REST API at `/v1/api/*`, Swagger at `/docs`. |
+| https://gateway.adtech.local | Same gateway (explicit host). The staff **Architecture** (C4 diagrams) and **Ops** sections live here. |
+| https://shop.adtech.local | Demo advertiser shop — fires the retargeting pixel + signed conversion postback (the CPA money loop). |
+
+**Demo publisher sites** (each its own brand — the showcase):
+
+| URL | Mimics | Ad format |
+|---|---|---|
+| https://viewtube.adtech.local | YouTube | VMAP video (`/watch/1..3` = pre / pre+mid / +post) |
+| https://twitchr.adtech.local | Twitch | Continuous **live SSAI** channel |
+| https://soundwave.adtech.local | Spotify | DAAST audio |
+| https://primereel.adtech.local | Netflix | Pre-roll video |
+| https://chronicle.adtech.local | A newspaper | Display + native in articles |
+| https://gadget.adtech.local | A tech blog | Display + native in a review feed |
+
+Every site has a collapsible **"behind the scenes" trace panel** (live ad calls,
+auction outcome, SSP-resolved audience segments).
+
+**Platform services** are reachable directly too for debugging:
+`ssp` · `exchange` · `dsp` / `dsp-int` · `dsp-comp1..4` · `adserver` · `pubad` ·
+`tracker` (all `.adtech.local`). Observability: Grafana, Jaeger, Loki.
+
+### Dev logins (planted by the seed)
+
+| Login | Role |
+|---|---|
+| `admin@adtech.local` / `admin` | Staff (sees everything, incl. Architecture + Ops) |
+| `advertiser@adtech.local` / `admin` | Advertiser (Globex) |
+| `publisher@adtech.local` / `admin` | Publisher (Daily News) |
+| `devops@adtech.local` / `admin` | Staff ops (the Ops console) |
+
+### localhost fallback (host tools / e2e only)
+
+`make demo-forward` (run in its own terminal) port-forwards `localhost` ports for
+CLI tools that hardcode them — gateway `:8080`, exchange `:8081`, dsp `:8082`,
+tracker `:8083`, ssp `:8084`, adserver `:8085`, reporting `:8086`, grafana `:3000`,
+jaeger `:16686`, etc. **You don't need it to browse** — the domains above work on
+their own. Full table in [`docs/DEMO-URLS.md`](docs/DEMO-URLS.md).
+
+---
+
+## Traffic simulator
+
+`cmd/simulator` generates production-like traffic (persona × channel, signed
+beacons, synthesised conversions) and drives the whole path: auction → bid → win →
+impression → viewability → maybe click → NATS → reporting.
 
 ```bash
-# See available profiles
-go run ./cmd/simulator profiles
+make traffic                       # continuous gentle traffic (DEMO_RPS, default 5). Ctrl-C to stop.
+make demo                          # seed + baseline traffic (one-command rich setup)
 
-# Single auction with specific targeting
-go run ./cmd/simulator single --geo GBR --device mobile
-
-# Trickle: 1 request/sec for 2 minutes
-go run ./cmd/simulator run --profile trickle --duration 2m
-
-# Steady: 10 requests/sec for 5 minutes
-go run ./cmd/simulator run --profile steady --duration 5m
-
-# Burst: 100 requests/sec for 1 minute
-go run ./cmd/simulator run --profile burst --duration 1m
-
-# Check if services are ready before simulating
-go run ./cmd/simulator check
+# direct CLI
+go run ./cmd/simulator single --geo GBR --device mobile   # one auction, see every hop
+go run ./cmd/simulator run --profile steady --duration 5m # 10 rps for 5 min
+go run ./cmd/simulator check                              # are services ready?
 ```
 
-Each request goes through the full flow: auction -> bid -> win -> impression -> viewability -> maybe click.
-
-## Querying the Analytics Store
-
-The reporting service accepts queries via HTTP POST:
+Load / performance runs (the money invariant + phase metrics):
 
 ```bash
-# Count all impressions
-curl -s http://localhost:8086/v1/reporting/query \
-  -H 'Content-Type: application/json' \
-  -d '{"table":"impressions","metrics":["count","sum_cost"]}' | jq
-
-# Impressions grouped by campaign
-curl -s http://localhost:8086/v1/reporting/query \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "table": "impressions",
-    "metrics": ["count", "sum_cost"],
-    "dimensions": ["campaign_id"]
-  }' | jq
-
-# Impressions by geo with time filter
-curl -s http://localhost:8086/v1/reporting/query \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "table": "impressions",
-    "metrics": ["count", "sum_cost"],
-    "dimensions": ["geo"],
-    "filters": {"account_id": "acc-123"},
-    "time_from": "2024-06-15T00:00:00Z",
-    "time_to": "2024-06-16T00:00:00Z"
-  }' | jq
-
-# Auction stats with average latency
-curl -s http://localhost:8086/v1/reporting/query \
-  -H 'Content-Type: application/json' \
-  -d '{"table":"auctions","metrics":["count","avg_duration_ms"]}' | jq
+make loadtest RPS=110 DURATION=10m VERIFY=1   # full-path load; VERIFY asserts reporting counts match
+make loadtest-ramp                            # progressive RPS stages, aborts on degradation
 ```
 
-### Pushing Events Directly (Standalone Mode)
+The full performance protocol (reset → seed big world → warm → run → read phase
+metrics + money canary) is the **`/perf-loadtest`** skill
+(`.claude/skills/perf-loadtest/SKILL.md`). For cluster-free compute
+micro-benchmarks and the configurable load-gen GUI, see **`/perf-microbench`**
+(`make bench`, `make bench-gui`).
 
-Without NATS, you can push events over HTTP:
+---
+
+## Running the tests
+
+Layered — pure logic is unit-tested; anything spanning services gets an e2e
+against the **live stack**. (Conventions: no mocks for Postgres/Redis/NATS; use
+fakes in `pkg/testutil` for unit, testcontainers for integration.)
+
+| Command | Layer | Needs |
+|---|---|---|
+| `make test` | **Unit** — `go test ./pkg/... ./cmd/...` | nothing |
+| `make test-integration` | **Integration** — `-tags=integration`, real Postgres/Redis/NATS | Docker (testcontainers) |
+| `make test-e2e` | **End-to-end** — `-tags=e2e` against the running stack (~190 tests, real ClickHouse) | stack up + seeded |
+| `make test-e2e-security` | **Security/auth e2e** — authn, RBAC, tenant isolation, consent, forged-header strip, rate limits, CSRF, SQLi | stack up + seeded |
+| `make test-e2e-chaos` | **Chaos e2e** — kills infra pods to prove fail-open (opt-in; destabilises other tests) | stack up |
+| `make bench` | **Hot-path micro-benchmarks** — diff vs baseline via benchstat (regression → function + commit) | stack **down** |
+| `make loadtest` | **Performance** — full-path load + money invariant | stack up + seeded |
+| `make test-all` | Every layer | — |
 
 ```bash
-curl -X POST http://localhost:8086/v1/reporting/events \
-  -H 'Content-Type: application/json' \
-  -d '[{
-    "type": "impression",
-    "impression": {
-      "trace_id": "test-1",
-      "campaign_id": "camp-1",
-      "creative_id": "cr-1",
-      "placement_id": "pl-1",
-      "publisher_id": "pub-1",
-      "account_id": "acc-1",
-      "geo": "GBR",
-      "device": "mobile",
-      "clearing_price": 2.50,
-      "clearing_currency": "USD",
-      "clearing_price_usd": 2.50,
-      "timestamp": "2024-06-15T10:00:00Z"
-    }
-  }]'
+make test                                  # all unit tests
+go test ./pkg/auction/ -run TestX -v       # one test
+go test ./pkg/... -race                    # race detector
+make lint                                  # golangci-lint + buf lint
 ```
 
-## Using Packages in Go Code
+> Always run e2e against the **full** deployed stack, never a partial one — see
+> `tests/e2e/` for the per-slice shape (register → act → assert persistence + the
+> negative/RBAC case).
 
-### Report Builder
+---
 
-```go
-import "github.com/MichaelJohnWatters/ad-tech-mono/pkg/reporting"
-import "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
+## Architecture diagrams — where to look
 
-store := analytics.NewMemory()
-// ... insert events ...
+Two places, both generated from source (never hand-drawn):
 
-// Custom query with fluent builder
-result, err := reporting.NewBuilder(store).
-    Table("impressions").
-    Metrics("count", "sum_cost").
-    GroupBy("campaign_id", "day").
-    ForAccount("acc-123").
-    TimeRange(from, to).
-    OrderByDesc("sum_cost").
-    Limit(10).
-    Build(ctx)
+1. **In the staff portal → Architecture page.** Log in as staff at
+   **https://adtech.local** → **Architecture**. It renders the **C4 model** —
+   Context / Containers / per-service Component views. Source is the single DSL in
+   [`docs/diagrams/workspace.dsl`](docs/diagrams/workspace.dsl); `make c4`
+   re-exports it into `web/static/diagrams/`.
 
-// Pre-built report templates
-result, _ := reporting.CampaignPerformance.Execute(ctx, store, "acc-123", from, to)
-result, _ := reporting.GeoBreakdown.Execute(ctx, store, "acc-123", from, to)
-result, _ := reporting.CreativePerformance.Execute(ctx, store, "acc-123", from, to)
-result, _ := reporting.PublisherYield.Execute(ctx, store, "pub-456", from, to)
-```
+2. **In the repo: [`docs/diagrams/`](docs/diagrams/).** D2 source + rendered SVGs
+   for the data/money/event **flow** diagrams (auction, billing, cache freshness,
+   data lifecycle, e2e trace, …). The index with a per-diagram "update when" column
+   is [`docs/diagrams/README.md`](docs/diagrams/README.md); `make diagrams`
+   re-renders the SVGs and syncs them into the portal.
 
-### HLL Reach Estimation
+**Rule:** a change that alters how services connect, or a data/money/event flow,
+updates the matching diagram in the same PR.
 
-```go
-import "github.com/MichaelJohnWatters/ad-tech-mono/pkg/reporting"
+---
 
-// Create a sketch per campaign
-hll := reporting.DefaultHLL() // precision 14, ~16KB, ~2% error
+## High-level project structure
 
-// Add user IDs as impressions arrive
-hll.AddString("user-abc")
-hll.AddString("user-def")
-hll.AddString("user-abc") // duplicate - won't increase count
-fmt.Println(hll.Count())  // ~2
-
-// Merge sketches across time periods (lossless)
-daily := hourly1.Clone()
-daily.Merge(hourly2)
-
-// Audience overlap between campaigns
-overlap := reporting.IntersectionEstimate(campaignA, campaignB)
-
-// Frequency distribution
-fd := reporting.NewFrequencyDistribution(map[string]int{
-    "user-1": 3, "user-2": 1, "user-3": 5,
-})
-fmt.Println(fd.AverageFrequency()) // 3.0
-fmt.Println(fd.Percentages())      // sorted buckets with percentages
-
-// Forecast reach for a campaign plan
-forecast := reporting.ForecastReach(
-    50000,   // $50K budget
-    2.50,    // $2.50 avg CPM
-    200000,  // 200K historical reach
-    500000,  // 500K historical impressions
-)
-// forecast.EstimatedReach, .EstimatedFrequency, .Confidence
-```
-
-### Data Pipeline
-
-```go
-import "github.com/MichaelJohnWatters/ad-tech-mono/pkg/pipeline"
-
-// Ingest a publisher CSV
-file, _ := os.Open("publisher_data.csv")
-records, _ := pipeline.IngestCSV(file, ',')
-
-// Also supports TSV
-records, _ := pipeline.IngestCSV(tsvFile, '\t')
-
-// Process through validation + normalisation + enrichment
-p := pipeline.New(logger)
-result := p.Process(ctx, records, pipeline.PublisherConfig{
-    PublisherID:    "acme_media",
-    RequiredFields: []string{"campaign_id", "impressions"},
-    FieldMappings:  map[string]string{
-        "campaign": "campaign_id",  // publisher calls it "campaign"
-        "imps":     "impressions",  // publisher calls it "imps"
-    },
-})
-
-fmt.Println(result.Stats.Valid)       // records that passed
-fmt.Println(result.Stats.Quarantined) // records that failed
-for _, qr := range result.Quarantine {
-    fmt.Println(qr.Errors) // why each record failed
-}
-```
-
-### Datalake (Delta Log)
-
-```go
-import "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/datalake"
-
-dl := datalake.NewMemory(logger)
-
-// Write records with schema tracking
-dl.Write(ctx, "normalised/impressions", records, schema)
-
-// Read with filters
-records, _ := dl.Read(ctx, "normalised/impressions", datalake.Filter{
-    TimeFrom: from,
-    TimeTo:   to,
-    Columns:  map[string]interface{}{"geo": "GBR"},
-})
-
-// Transaction log (Delta Log)
-txns, _ := dl.Log(ctx, "normalised/impressions")
-// Each txn: version, timestamp, action (add/remove), path, row count
-
-// Current table state
-snap, _ := dl.Snapshot(ctx, "normalised/impressions")
-// snap.Version, .TotalRows, .ActiveFiles, .Schema
-```
-
-### Rollup Engine
-
-```go
-import "github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/rollup"
-
-engine := rollup.NewEngine(analyticsStore, clock, logger)
-engine.Register(rollup.EventsConfig)   // impressions rollup
-engine.Register(rollup.AuctionsConfig) // auctions rollup
-
-// Run hourly rollup (aggregates last completed hour)
-results, err := engine.RunLevel(ctx, rollup.Hourly)
-
-// Auto-select the right tier for a query time range
-tier := rollup.TierForRange(from, to)
-// <= 30min -> Minute, <= 24h -> Hourly, <= 90d -> Daily, else -> Monthly
-```
-
-## Running Tests
-
-```bash
-# All packages
-go test ./pkg/...
-
-# Specific package
-go test ./pkg/reporting/ -v
-
-# Specific test
-go test ./pkg/reporting/ -run TestHLL_BasicCardinality -v
-
-# With race detector
-go test ./pkg/... -race
-
-# Build all service binaries
-for svc in gateway exchange dsp tracker ssp adserver reporting pipeline; do
-  go build -o ./bin/$svc ./cmd/$svc
-done
-```
-
-## API Reference
-
-### Exchange (:8081)
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/v1/openrtb/auction` | Submit bid request, run auction |
-| GET | `/v1/openrtb/win?price=&bid_id=` | Win notice to DSP |
-| GET | `/v1/openrtb/loss?bid_id=&reason=` | Loss notice to DSP |
-
-### DSP (:8082)
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/v1/openrtb/bid` | Evaluate bid request, return bid |
-
-### Tracker (:8083)
-
-| Method | Path | Description |
-|---|---|---|
-| GET | `/v1/t/imp?tid=&cid=&pid=&sig=` | Impression pixel (1x1 GIF) |
-| GET | `/v1/t/click?tid=&redir=&sig=` | Click redirect (302) |
-| GET | `/v1/t/conv?tid=&type=&sig=` | Conversion pixel (1x1 GIF) |
-| GET | `/v1/t/view?tid=&dur=&pct=` | Viewability beacon (204) |
-| GET | `/v1/t/video?tid=&event=` | Video event (204) |
-| GET | `/v1/t/audio?tid=&event=` | Audio event (204) |
-
-### Reporting (:8086)
-
-| Method | Path | Description |
-|---|---|---|
-| POST | `/v1/reporting/query` | Query analytics store |
-| POST | `/v1/reporting/events` | HTTP event ingestion (standalone) |
-
-## Project Structure
+A Go monorepo: one module, service binaries under `cmd/`, all shared logic under
+`pkg/` (nothing external). The synchronous serving spine is
+**SSP → Exchange → DSP → Ad Server → Tracker → Reporting**, with async events over
+NATS JetStream and three data stores (Postgres transactional, ClickHouse analytics,
+S3/Parquet lake).
 
 ```
 ad-tech-mono/
-  cmd/                    # Service entrypoints (one binary per service)
-    gateway/              # API gateway + dashboard + dev tools
-    exchange/             # Ad exchange - auctions
-    dsp/                  # Demand-side platform - bidding
-    tracker/              # Event tracking - pixels
-    ssp/                  # Supply-side platform - inventory
-    adserver/             # Creative serving
-    reporting/            # Analytics + event ingestion
-    pipeline/             # Data pipeline
-    simulator/            # Traffic simulation CLI
-    seed/                 # Seed data loader
-    migrate/              # Database migrations
-  pkg/                    # Shared packages (all reusable libraries)
-    auction/              # Auction engine (5 strategies)
-    targeting/            # 11-dimension targeting + bid modifiers
-    pacing/               # Budget pacing (even/ASAP/front-loaded)
-    reporting/            # Report builder + HLL reach + forecasting
-    pipeline/             # Ingest, validate, normalise, enrich
-    store/analytics/      # Analytics store (Memory + DuckDB)
-    store/rollup/         # Universal rollup framework
-    store/datalake/       # Parquet/Delta Log abstraction
-    store/postgres/       # Multi-tenant Postgres with RLS
-    events/               # EventBus interface (NATS JetStream)
-    cache/                # L1 in-process + L2 Redis
-    models/               # Domain types
-    openrtb/              # OpenRTB 2.6 types
-    config/               # Three-layer configuration
-    auth/                 # RBAC (5 account types, 6 roles)
-    currency/             # Multi-currency conversion
-    clock/                # Time abstraction (Real + Fake)
-    logger/               # Structured JSON logging + trace IDs
-    health/               # /healthz and /readyz
-    lifecycle/            # Graceful shutdown
-  web/                    # HTML templates + static assets
-  k8s/                    # Kubernetes manifests (Kustomize overlays)
-    base/                 # Base manifests (all services + infra)
-    overlays/local/       # Local dev patches
-    overlays/local-lite/  # Lite mode (no observability)
-  build/                  # Dockerfiles
-  migrations/             # Goose SQL migrations
-  profiles/               # Seed data + simulation configs
-  docs/                   # PLAN.md (architecture) + openapi.yaml
-  tests/                  # E2E smoke tests
+├── cmd/            Service entrypoints — one binary per service/job/host-tool
+│   ├── gateway/        API + portal (advertiser/publisher/staff/ops) + REST + proxy
+│   ├── ssp/            Supply-side: publisher inventory, builds bid requests
+│   ├── exchange/       Auctions, DSP fan-out, deal priority, SmartRouter
+│   ├── dsp/            Demand-side: targeting, pacing, bid shading, budgets
+│   ├── adserver/       Creative serving, tracking URLs, freq caps
+│   ├── tracker/        Impression/click/conversion/viewability beacons
+│   ├── reporting/      NATS consumer → analytics; hosts the billing engine
+│   ├── pipeline/       Data ingest/validate/enrich + audience changelog drainer
+│   ├── ssai/ transcoder/           Server-side ad insertion (CTV/video/audio)
+│   ├── publisher-adserver/         Direct-sold vs programmatic arbitration
+│   ├── {webhooks,notifications,identity-consumer,audience-rt,report-runner}/  async workers
+│   ├── {seed,migrate,batch-conductor,*-runner,dayboundary}/                   jobs & CronJobs
+│   └── {simulator,demosite,demoadv,extbidder,devconsole}/                     host tools
+├── pkg/            Shared libraries — auction, targeting, pacing, bidshading,
+│                   billing, store/*, events, cache, openrtb, config, auth, privacy…
+├── web/            Go templates + HTMX + Tailwind + the adtech.js SDK (no JS build)
+├── k8s/            Helm chart `helm/adtech` (per-env values) + frozen `base/` (parity reference)
+├── build/          Dockerfiles
+├── migrations/     goose SQL migrations (every table has an RLS policy)
+├── profiles/       Seed data, simulation personas, publisher/bench configs
+├── docs/           PLAN.md, openapi.yaml, diagrams/, ADRs, DEMO-URLS.md
+├── python/         ML model training (fraud, optimisation) — the only non-Go code
+└── tests/e2e/      End-to-end suites (-tags=e2e) against the live stack
 ```
 
-## Tech Stack
+Working on a specific area? Read that directory's own `CLAUDE.md` first (there's
+one in every `cmd/*` and most `pkg/*`), then `docs/PLAN.md` for the design rationale.
 
-- **Language:** Go everywhere. Python only for ML/data science.
-- **Frontend:** Go templates + HTMX + Tailwind CSS. No JS build pipeline.
-- **Protocols:** OpenRTB JSON/HTTP (bidding), gRPC (internal), NATS JetStream (async events)
-- **Databases:** PostgreSQL (transactional), DuckDB/ClickHouse (analytics)
-- **Object storage:** S3 everywhere - Minio locally, real S3 in staging/prod
-- **Caching:** L1 in-process + L2 Redis + L3 Postgres
-- **Infrastructure:** K8s everywhere, Kustomize overlays, Tilt for dev
+---
 
-## What's Next
+## Tech stack
 
-Phase 4: Billing and Finance (Steps 36-44) - AuctionWinEvent consumer, double-entry ledger, view-through attribution, variable margin, reconciliation, invoicing.
+- **Language:** Go everywhere (backend, frontend, tooling). Python only for ML.
+- **Frontend:** Go templates + HTMX + Tailwind CSS — no JS build pipeline.
+- **Protocols:** gRPC on owned internal hot edges (`pkg/grpcx`, `grpc://` vs `http://`
+  by config), OpenRTB JSON/HTTP on every external bidding boundary, NATS JetStream
+  for async events (JSON payloads), HTTP/JSON for the dashboard + API.
+- **Databases:** PostgreSQL (transactional, RLS multi-tenancy), ClickHouse/DuckDB
+  (analytics), Parquet on S3 (the data lake).
+- **Object storage:** S3 everywhere — Minio locally, real S3 in staging/prod (one code path).
+- **Caching:** L1 in-process + L2 Redis + L3 Postgres, invalidated over NATS.
+- **Infrastructure:** Kubernetes everywhere (Rancher Desktop k3s local, k3s prod),
+  Helm chart with per-env values; `make stack-up` / `make deploy SVC=x` dev loop.
+- **Observability:** slog, Prometheus + Grafana, Loki, Jaeger (OpenTelemetry tracing).
 
-See `docs/PLAN.md` for the full 123-step build plan across 12 phases.
+See [`docs/PLAN.md`](docs/PLAN.md) for the full architecture and the 12-phase plan.
