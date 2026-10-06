@@ -53,6 +53,26 @@ make bench                                      # diff your change against it
 
 (Then restore the real committed baseline with `git checkout docs/perf/bench/baseline.txt`.)
 
+## Configurable load gen with saved profiles (`benchrun`)
+
+When you want to DIAL the world rather than run the fixed benches — campaign
+count, eligible-bid count, targeting density, channel, concurrency, duration —
+use the `benchrun` tool. It runs the same compute (DSP bid loop → bids →
+auction) in a timed, parallel loop and reports auctions/sec + p50/p95/p99
+latency + allocs/cycle.
+
+```sh
+make bench-run-list                      # saved profiles (profiles/bench/*.yaml)
+make bench-run PROFILE=big-world         # 2000 campaigns, all cores, 5s
+make bench-run ARGS='-campaigns 500 -targeting dense -channel retail -concurrency 8 -duration 5s'
+make bench-run PROFILE=standard ARGS='-concurrency 4'   # profile + flag override
+```
+
+Saved profiles: `small` (sanity), `standard` (200-campaign display), `big-world`
+(2000-campaign stress), `retail` (relevance-weighted multi-winner), `broad`
+(cheap-match). Add one by dropping a YAML in `profiles/bench/`. Any flag
+overrides the profile. Same compute-ceiling caveat as below — not platform rps.
+
 ## "How many auctions/sec can the compute do?" (the ceiling, not platform rps)
 
 ```sh

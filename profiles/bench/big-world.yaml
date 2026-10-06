@@ -1,0 +1,8 @@
+name: big-world
+description: Large catalog stress — 2000 campaigns, saturate all cores (mirrors the perfbench big world's book size).
+campaigns: 2000
+bids: 50
+targeting: dense
+channel: display
+concurrency: 0
+duration: 5s

@@ -1,0 +1,8 @@
+name: retail
+description: Retail sponsored-products grid — relevance-weighted multi-winner auction.
+campaigns: 500
+bids: 50
+targeting: dense
+channel: retail
+concurrency: 0
+duration: 3s

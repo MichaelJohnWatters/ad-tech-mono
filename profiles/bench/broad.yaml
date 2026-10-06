@@ -1,0 +1,8 @@
+name: broad
+description: Broad targeting (geo/device only) — the cheap-match end of the spectrum.
+campaigns: 500
+bids: 25
+targeting: broad
+channel: display
+concurrency: 0
+duration: 3s
