@@ -385,6 +385,9 @@ bench-pin: ## Re-pin the micro-benchmark baseline (do deliberately after a known
 bench-run: ## Configurable compute load gen from a saved profile (profiles/bench/*.yaml). Dial campaigns/bids/targeting/channel/concurrency/duration; reports auctions/sec + p50/p95/p99. Usage: make bench-run PROFILE=big-world  (or ARGS='-campaigns 500 -concurrency 8 -duration 5s'). Stack down.
 	go run ./cmd/benchrun $(if $(PROFILE),-profile $(PROFILE),) $(ARGS)
 
+bench-gui: ## Web GUI for benchrun — profile dropdown + knob inputs + Run button at http://localhost:7777 (ADDR= to change). Host-only; stop the stack for clean numbers.
+	go run ./cmd/benchrun -serve $(if $(ADDR),-addr $(ADDR),)
+
 bench-run-list: ## List saved benchrun profiles.
 	go run ./cmd/benchrun -list
 
