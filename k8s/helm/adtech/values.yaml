@@ -316,11 +316,21 @@ services:
       # work for those). Set 1.0 when deep-debugging a specific flow.
       - name: OTEL_SAMPLE_RATIO
         value: "0.1"
+      # GC backstop (handoff 08): the Go runtime can't see the cgroup limit,
+      # so a request pile-up balloons the heap straight into the OOM killer
+      # (observed 2026-10-08: lock-wedge → 6k parked handlers → 499Mi → kill
+      # cascade). With GOMEMLIMIT just under the limit, the same pressure
+      # becomes hard GC + latency instead of pod death — degraded beats dead
+      # for a bidder. ~88% of the 512Mi limit, leaving room for stacks +
+      # non-heap runtime memory.
+      - name: GOMEMLIMIT
+        value: "450MiB"
     resources:
       # 512Mi holds at 250rps once HPA scales dsp-internal to 6 (load spreads).
-      # The earlier 110rps OOMKill was with replicas PINNED at 2 for a measurement
-      # (HPA off) — all load on 2 memory-starved pods. The fix is autoscaling,
-      # not fatter pods, so keep 512Mi.
+      # The 2026-10-08 110rps OOM-cycling was NOT a sizing problem: a
+      # recursive-RLock wedge in bidshading piled up handlers until any limit
+      # would have tripped (handoff 08, fixed in pkg/bidshading). Keep 512Mi;
+      # GOMEMLIMIT above is the backstop against future pile-ups.
       requests: { cpu: 250m, memory: 96Mi }
       limits: { cpu: 2000m, memory: 512Mi }
     livenessProbe:
