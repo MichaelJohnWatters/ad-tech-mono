@@ -48,3 +48,4 @@ Protocol + comparability rules: .claude/skills/perf-loadtest/SKILL.md.
 | 2026-08-07 16:28 | 598e0df | 179.8 | 10m | 91.9 | GREEN | 0 | 125.43 | 462.59 | 87.59 | 522.83 | 221.54 | 1.08 | 88.45 | 144.78 | -10.33 | 92.22 | 8.63 | push test: 180rps on trimmed+log-sampled stack (pre-trim 188rps ref: fanout p95 920, canary -25.58) |
 | 2026-10-03 19:15 | 82b7e11+dirty | 109.8 | 10m | 90.7 | GREEN | 0 | 29.17 | 246.41 | 49.72 | 348 | 94.84 | 0.5 | 46.89 | 45.8 | 3.305 | 88.73 | 14.31 | A/B after trace-segments 9b73215 |
 | 2026-10-03 19:45 | 4d956f7+dirty | 110 | 10m | 90.1 | GREEN | 0 | 11.58 | 88.06 | 30.01 | 111.11 | 42.23 | 0.49 | 23.79 | 18.62 | 4.9175 | 90.55 | 15.29 | A/B after trace-segments 9b73215, post rdctl-restart (clean VM) |
+| 2026-10-08 21:49 | 1755d082 | 259.3 | 5m | 64.1 | GREEN | 0 | 502.23 | 950.93 | 307.89 | 971.85 | 419.33 | 37.67 | 493.23 | 239.55 | -3.2125 | 92.44 | 12.18 | post-08 ceiling sweep (all levers in) |
