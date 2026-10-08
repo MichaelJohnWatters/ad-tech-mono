@@ -16,6 +16,7 @@ var DSP = struct {
 	Profile                            config.StringKey
 	DailyBudgetDefault                 config.FloatKey
 	MaxBidModifier                     config.FloatKey
+	MaxInflightBids                    config.IntKey
 	NoisePct                           config.FloatKey
 	NoBidRate                          config.FloatKey
 	BudgetResetInterval                config.DurationKey
@@ -56,6 +57,7 @@ var DSP = struct {
 	Profile:                            dspSet.String("dsp.profile", "internal", config.TierStatic, "Which DSP identity this pod assumes (internal, competitor1, competitor2). Decides which dsps table row supplies noise_pct and no_bid_rate defaults.", config.Since("v1.0")),
 	DailyBudgetDefault:                 dspSet.Float("dsp.daily_budget_default", "1000", config.TierLive, "Daily spend ceiling (USD) applied to a new campaign when the operator hasn't picked one. Per-campaign overrides win once a campaign is created.", config.Since("v1.0")),
 	MaxBidModifier:                     dspSet.Float("dsp.max_bid_modifier", "200", config.TierLive, "Safety rail: maximum percentage a bid modifier can multiply a base bid (200 = 2x). Stops a runaway targeting rule from blowing through budget.", config.Since("v1.0")),
+	MaxInflightBids:                    dspSet.Int("dsp.max_inflight_bids", "256", config.TierLive, "Load-shed rail: max concurrent bid requests (HTTP + gRPC) this pod will WORK ON; request N+1 gets an instant 204 no-bid instead of queueing. A bidder must answer inside the exchange's tmax or say no fast — queueing is the worst outcome (the 2026-10-08 wedge piled 6k handlers into an OOM, handoff 08). Sized ~10x the healthy in-flight at 300rps so it only bites genuine pile-ups; 0 disables. Live: drop it mid-run to watch shedding engage (adtech_dsp_bids_shed_total).", config.Since("v1.21")),
 	NoisePct:                           dspSet.Float("dsp.noise_pct", "0", config.TierLive, "Adds ±N% random jitter to every bid (e.g. 30 = ±30%). 0 = exact bids. Used to simulate market noise in the realism profiles; in prod leave at 0.", config.Since("v1.1")),
 	NoBidRate:                          dspSet.Float("dsp.no_bid_rate", "0", config.TierLive, "Probability (0-1) that the DSP randomly returns no_bid even when a campaign matches. Used by the competitor profiles to mimic flaky DSPs; leave at 0 for the real one.", config.Since("v1.1")),
 	BudgetResetInterval:                dspSet.Duration("dsp.budget_reset_interval", "24h", config.TierLive, "How long Redis keeps a campaign's daily-spend counter before it expires back to zero. Effectively the rolling budget window length.", config.Since("v1.1")),

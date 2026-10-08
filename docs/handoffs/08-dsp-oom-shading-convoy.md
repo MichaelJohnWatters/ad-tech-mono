@@ -27,8 +27,25 @@
 > between 150 and 200 (p50 jumps 24.5→392ms). Caveat: 250/300 stages ran
 > budget-depleted (mostly no-bid workload) — a fresh-world run at 200
 > would be the clean knee measurement. Numbers NOT in the perfbench
-> ledger (ramp run directly, not via perfbench.sh). REMAINING: load-shed
-> (lever 3), cleanup tier (lever 4), autoscaling left OFF by choice.
+> ledger (ramp run directly, not via perfbench.sh).
+>
+> **PG levers + knee re-probe (2026-10-08 evening):** grant skip-set
+> (08c93265) + burl batching (524f4972) cut postgres 0.54→0.36 cores at
+> 150rps. Fresh-world 200rps/5m probe: fanout p50/p95 **173/850ms at
+> 85.8% fill** vs the ramp's 392/938 at 38% fill — p50 2.3× better on a
+> harder workload, postgres 1.08→0.41 (−62%) at the knee. The clean knee
+> now sits ≈200rps; remainder is the kernel floor (host-structural).
+>
+> **Lever 3 SHIPPED + LIVE-VALIDATED: in-flight bid cap**
+> (dsp.max_inflight_bids, default 256, live; shedding.go wraps the shared
+> handler so HTTP + gRPC shed under one budget; 204 no-bid, never queue;
+> adtech_dsp_bids_shed_total). Validation: 0 sheds at default under
+> 150rps; knob dropped to 2 live mid-run → ~1,300 sheds across 3 pods,
+> 0 errors, 0 restarts; knob restored → sheds stop. A future pile-up now
+> degrades to lost auctions instead of OOM death. REMAINING: cleanup tier
+> (lever 4: invalidate storm, pools, hot-path logging, exchange
+> Transport), burl claim batching + delivery investigation (PLAN),
+> autoscaling left OFF by choice.
 
 # Session: DSP OOM crash-loop — the shading-tracker lock convoy
 

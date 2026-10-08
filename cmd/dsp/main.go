@@ -320,6 +320,9 @@ func main() {
 	identityMaxLinked := keys.DSP.IdentityMaxLinked.Get(cfg)
 	responseDelayFn := func() time.Duration { return keys.DSP.ResponseDelay.Get(cfg) }
 	bid := bidHandler(log, clk, campaignCache, audienceStore, optOutCache, budget, balanceGate, isCompetitor, noisePctFn, noBidRateFn, responseDelayFn, pub, &depletedAlreadyPublished, adCertVerify, identityResolver, identityMaxLinked, flightPacingFn, shadingEnabledFn, shadingTracker, shades, keys.DSP.NoticeBaseURL.Get(cfg))
+	// In-flight cap (shedding.go): wraps the shared handler BEFORE both
+	// registrations so the HTTP path and the gRPC twin shed under one budget.
+	bid = shedBids(bid, func() int { return keys.DSP.MaxInflightBids.Get(cfg) }, newShedCounter(metrics.Registry()))
 	mux.HandleFunc(routes.OpenRTBBid, bid)
 	// Internal gRPC twin of the bid endpoint. Only our own exchange dials it
 	// (grpc://dsp-internal:8182); the exchange's fan-out to any third-party
