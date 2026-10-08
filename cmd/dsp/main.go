@@ -22,6 +22,7 @@ import (
 	audcached "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/cached"
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	audpreload "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/preload"
+	audprobe "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/probe"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/bidshading"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache"
 	cacheredis "github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/redis"
@@ -280,6 +281,19 @@ func main() {
 		Buckets: []float64{.0005, .001, .0025, .005, .01, .025, .05, .1, .25, .5},
 	}, []string{"phase"})
 	metrics.Registry().MustRegister(dspBidPhases)
+
+	// Step 0 of the audience L1 cache: wrap the lookup in a shadow hit-rate probe
+	// (off by default → one atomic check per lookup; counters land on the DSP
+	// registry). Wrapped here, after the registry exists and before the bid
+	// handler reads audienceStore. Flip audience.l1_probe_enabled live to measure.
+	if audienceStore != nil {
+		ap := audprobe.Wrap(audienceStore,
+			config.NewLiveBool(sc.Manager, cfg, keys.Audience.L1ProbeEnabledDSP.Key(), keys.Audience.L1ProbeEnabledDSP.Default()).Value,
+			config.NewLiveDuration(sc.Manager, cfg, keys.Audience.L1ProbeTTLDSP.Key(), keys.Audience.L1ProbeTTLDSP.Default()).Value,
+			metrics.Registry())
+		lc.OnShutdown("audience-l1-probe", func(context.Context) error { ap.Stop(); return nil })
+		audienceStore = ap
+	}
 
 	mux := http.NewServeMux()
 	// On-demand profiler (internal mux only; zero cost until a profile is
