@@ -190,7 +190,11 @@ func main() {
 			consumer.SetMarketplaceAccrual(newMarketplaceAccrual(dfDB,
 				func() float64 { return keys.Reporting.MarketplaceSurchargeMarginPct.Get(cfg) }, grantBuyers, log))
 			// OpenRTB burl billing notices share the DB too (burl_pending join).
-			consumer.SetBurlNotifier(newBurlNotifier(dfDB, log))
+			// Stop() flushes the park batch buffer so an orderly shutdown
+			// loses nothing (kill-9 loses ≤25ms of parks — spool posture).
+			bn := newBurlNotifier(dfDB, log)
+			consumer.SetBurlNotifier(bn)
+			lc.OnShutdown("burl-notifier", func(_ context.Context) error { bn.Stop(); return nil })
 		} else {
 			log.Warn("data-fee accrual disabled (postgres open failed)", "error", err)
 		}
