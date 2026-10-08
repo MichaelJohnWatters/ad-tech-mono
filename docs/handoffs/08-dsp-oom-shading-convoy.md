@@ -14,8 +14,21 @@
 > VERIFY green, lossless): fill 22.2% → 94.7%** (golden ~92);
 > dsp-internal restarts continuous-OOM → **0**, peak RSS 499Mi → **97Mi**;
 > DSP campaign_loop p95 3.3ms; exchange fanout p50/p95 28.8/240.6ms (at
-> the scenario-market baseline 27.7/225). REMAINING: GOMEMLIMIT (lever 2),
-> load-shed (lever 3), cleanup tier (lever 4), re-enable autoscaling.
+> the scenario-market baseline 27.7/225).
+>
+> **GOMEMLIMIT shipped (e6aaeab5) + CEILING RAMP 2026-10-08 20:30**
+> (150/200/250/300 × 5m, 3 pinned dsp pods, no HPA, one world across
+> stages so fill decays with budget — by design): ALL stages held offered
+> rate, 0 errors, lossless, 0 restarts. Fanout p50/p95 per stage:
+> 150→24.5/573 · 200→392/938 · 250→732/973 · 300→747/975ms. Peak dsp RSS
+> 464Mi — GOMEMLIMIT held the 300rps stage in the GC-pressure zone
+> (396 goroutines, no pile-up, no OOM: the backstop works). Verdict:
+> throughput/money ceiling is ≥300rps on this VM; the LATENCY knee is
+> between 150 and 200 (p50 jumps 24.5→392ms). Caveat: 250/300 stages ran
+> budget-depleted (mostly no-bid workload) — a fresh-world run at 200
+> would be the clean knee measurement. Numbers NOT in the perfbench
+> ledger (ramp run directly, not via perfbench.sh). REMAINING: load-shed
+> (lever 3), cleanup tier (lever 4), autoscaling left OFF by choice.
 
 # Session: DSP OOM crash-loop — the shading-tracker lock convoy
 
@@ -89,6 +102,35 @@ DURATION=10m` (73-campaign big-world, HPA pinned off, warm caches):
   all `anon` (process memory).
 - Store latency as the primary cause of the 231ms — it's lock wait + death
   cycling. (Pool sizing still worth fixing, above.)
+
+## Where the next gains live (attributed 2026-10-08 evening)
+
+CPU-by-pod at the ramp's 200rps stage: **postgres-0 = 1.08 cores, the #1
+consumer in the namespace** (5× any app pod; dsp ~0.19ea, exchange 0.08ea).
+Control built into the ramp: at the budget-depleted 300 stage postgres fell
+to 0.15 while DSPs tripled → **postgres load is WIN-driven**. Node modes:
+200rps = 8.4/10 cores used (kernel ~4.8 structural, user 3.6); 300rps =
+9.5/10 (user 5.6). Observability pods are NOT the lever (promtail 0.13,
+loki/jaeger/grafana below top-14) — handoff 06's sampling fix holds.
+
+Attribution (fresh world, 150rps/4m, 95.1% fill, pg_stat_user_tables diff
++ pg_stat_activity sampling at ~0.6s):
+- **marketplace_grants JOIN** (data-fee attribution): ~28% of sampled PG
+  time, ~40 idx-scans/s — PER WIN, against a table with 18 rows that
+  changed 0 times during the run. A warm cache erases it.
+- **burl_pending lifecycle**: ~40%+ of sampled time — INSERT ON CONFLICT
+  per win, DELETE..RETURNING per burl fire, periodic created_at sweep
+  DELETEs. ~10k inserts + 42k idx scans per 4min. Candidates: Redis with
+  TTL (it's a pending-notification dedup), or batch the inserts.
+- data_fee_pending point reads ~8%; identity_graph ingest ~3%.
+- Catalog N+1 reload churn (insertion_orders/targeting_rules/accounts,
+  ~55 seq-scans/s of tiny tables) + advertiser_balances invalidate storm
+  (~2 full reloads/s): visible in counters, minor in time share.
+
+Estimated recoverable: ~0.7–0.9 of postgres's 1.08 cores at the knee, and
+it SCALES WITH WINS — at 250rps full-fill it would be proportionally
+larger. Next concrete levers, ranked: (1) warm-cache marketplace_grants,
+(2) burl_pending → Redis/batched, (3) the existing cleanup tier.
 
 ## Fix plan (ranked, A/B each per perf-loadtest protocol)
 
