@@ -20,6 +20,7 @@ import (
 
 	audstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store"
 	audcached "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/cached"
+	audl1 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/l1"
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	audpreload "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/preload"
 	audprobe "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/probe"
@@ -282,11 +283,18 @@ func main() {
 	}, []string{"phase"})
 	metrics.Registry().MustRegister(dspBidPhases)
 
-	// Step 0 of the audience L1 cache: wrap the lookup in a shadow hit-rate probe
-	// (off by default → one atomic check per lookup; counters land on the DSP
-	// registry). Wrapped here, after the registry exists and before the bid
-	// handler reads audienceStore. Flip audience.l1_probe_enabled live to measure.
+	// Audience L1 cache (Phase 1, default ON, live kill-switch) in front of the
+	// per-auction Redis lookup — the Step-0 probe measured ~80% dsp_private hit
+	// rate. Wrapped after the registry exists and before the bid handler reads
+	// audienceStore. The Step-0 probe stays wired OUTSIDE the cache (default OFF)
+	// so it can re-measure true per-auction locality on demand.
 	if audienceStore != nil {
+		l1c := audl1.Wrap(audienceStore,
+			config.NewLiveBool(sc.Manager, cfg, keys.Audience.L1CacheEnabledDSP.Key(), keys.Audience.L1CacheEnabledDSP.Default()).Value,
+			config.NewLiveDuration(sc.Manager, cfg, keys.Audience.L1CacheTTLDSP.Key(), keys.Audience.L1CacheTTLDSP.Default()).Value,
+			metrics.Registry())
+		lc.OnShutdown("audience-l1-cache", func(context.Context) error { l1c.Stop(); return nil })
+		audienceStore = l1c
 		ap := audprobe.Wrap(audienceStore,
 			config.NewLiveBool(sc.Manager, cfg, keys.Audience.L1ProbeEnabledDSP.Key(), keys.Audience.L1ProbeEnabledDSP.Default()).Value,
 			config.NewLiveDuration(sc.Manager, cfg, keys.Audience.L1ProbeTTLDSP.Key(), keys.Audience.L1ProbeTTLDSP.Default()).Value,

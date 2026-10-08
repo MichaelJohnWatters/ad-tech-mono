@@ -24,6 +24,12 @@ var Audience = struct {
 	L1ProbeEnabledSSP config.BoolKey
 	L1ProbeTTLDSP     config.DurationKey
 	L1ProbeTTLSSP     config.DurationKey
+	// L1 cache (Phase 1) — the real in-process cache the probe justified
+	// (~80% DSP / ~37% SSP would-be hits). Default ON (live kill-switch), TTL 3s.
+	L1CacheEnabledDSP config.BoolKey
+	L1CacheEnabledSSP config.BoolKey
+	L1CacheTTLDSP     config.DurationKey
+	L1CacheTTLSSP     config.DurationKey
 }{
 	// PreloadInterval is now the RECONCILE interval — the full membership scan is
 	// a self-heal backstop, since freshness comes from the delta path (writers
@@ -51,9 +57,16 @@ var Audience = struct {
 	L1ProbeEnabledSSP: sspSet.Bool("ssp.audience_l1_probe_enabled", "false", config.TierLive, l1ProbeHelp, config.Since("v1.17")),
 	L1ProbeTTLDSP:     dspSet.Duration("dsp.audience_l1_probe_ttl", "3s", config.TierLive, l1TTLHelp, config.Since("v1.17")),
 	L1ProbeTTLSSP:     sspSet.Duration("ssp.audience_l1_probe_ttl", "3s", config.TierLive, l1TTLHelp, config.Since("v1.17")),
+	L1CacheEnabledDSP: dspSet.Bool("dsp.audience_l1_cache_enabled", "true", config.TierLive, l1CacheHelp, config.Since("v1.17")),
+	L1CacheEnabledSSP: sspSet.Bool("ssp.audience_l1_cache_enabled", "true", config.TierLive, l1CacheHelp, config.Since("v1.17")),
+	L1CacheTTLDSP:     dspSet.Duration("dsp.audience_l1_cache_ttl", "3s", config.TierLive, l1CacheTTLHelp, config.Since("v1.17")),
+	L1CacheTTLSSP:     sspSet.Duration("ssp.audience_l1_cache_ttl", "3s", config.TierLive, l1CacheTTLHelp, config.Since("v1.17")),
 }
 
 const (
 	l1ProbeHelp = "Shadow hit-rate probe for the proposed per-auction audience L1 cache: counts would-be cache hits/misses (adtech_audience_l1_probe_{hits,misses}_total) against the probe TTL WITHOUT changing serving — every lookup still hits Redis. The go/no-go gate for building the real cache. Off by default (one atomic check on the bid path); enable only for a measurement run."
 	l1TTLHelp   = "Candidate L1 TTL the hit-rate probe measures against: a repeat lookup of the same user within this window counts as a would-be cache HIT. Set to the TTL you'd actually ship (~3s, within the audience changelog drainer lag)."
+
+	l1CacheHelp    = "Serve the per-auction audience segment lookup from an in-process L1 cache (absolute TTL, falls through to Redis on miss) instead of a Redis SMEMBERS every auction. Default ON — the live kill-switch: set false to bypass instantly (pure passthrough). Staleness is bounded by the TTL below."
+	l1CacheTTLHelp = "L1 audience cache TTL: how long a user's segments are served from memory before re-reading Redis. A cache hit does NOT extend it (absolute expiry), so every user is refreshed at least this often. ~3s keeps total staleness within the changelog drainer lag the system already tolerates."
 )

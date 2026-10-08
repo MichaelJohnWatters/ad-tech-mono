@@ -23,6 +23,7 @@ import (
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/adserving"
 	audstore "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store"
 	audcached "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/cached"
+	audl1 "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/l1"
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	audpreload "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/preload"
 	audprobe "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/probe"
@@ -131,10 +132,16 @@ func main() {
 	}, []string{"phase"})
 	metrics.Registry().MustRegister(sspServePhases)
 
-	// Step 0 of the audience L1 cache: wrap the public-segment lookup in a shadow
-	// hit-rate probe (off by default → one atomic check per lookup; counters on
-	// the SSP registry). Flip audience.l1_probe_enabled live to measure.
+	// Audience L1 cache (Phase 1, default ON, live kill-switch) in front of the
+	// per-auction public-segment Redis lookup; the Step-0 probe stays wired
+	// OUTSIDE it (default OFF) for on-demand locality re-measurement.
 	if audienceStore != nil {
+		l1c := audl1.Wrap(audienceStore,
+			config.NewLiveBool(sc.Manager, cfg, keys.Audience.L1CacheEnabledSSP.Key(), keys.Audience.L1CacheEnabledSSP.Default()).Value,
+			config.NewLiveDuration(sc.Manager, cfg, keys.Audience.L1CacheTTLSSP.Key(), keys.Audience.L1CacheTTLSSP.Default()).Value,
+			metrics.Registry())
+		lc.OnShutdown("audience-l1-cache", func(context.Context) error { l1c.Stop(); return nil })
+		audienceStore = l1c
 		ap := audprobe.Wrap(audienceStore,
 			config.NewLiveBool(sc.Manager, cfg, keys.Audience.L1ProbeEnabledSSP.Key(), keys.Audience.L1ProbeEnabledSSP.Default()).Value,
 			config.NewLiveDuration(sc.Manager, cfg, keys.Audience.L1ProbeTTLSSP.Key(), keys.Audience.L1ProbeTTLSSP.Default()).Value,
