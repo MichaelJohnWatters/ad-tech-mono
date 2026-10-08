@@ -120,6 +120,28 @@ DURATION=10m` (73-campaign big-world, HPA pinned off, warm caches):
 - Store latency as the primary cause of the 231ms — it's lock wait + death
   cycling. (Pool sizing still worth fixing, above.)
 
+## BASELINE NOT PINNED — host VZ degradation (2026-10-08 late)
+
+Tried to pin a golden 150rps/30m soak post-levers; could NOT get a clean
+run. Sequence: a 350rps perfbench stage SEIZED the VM (apiserver + docker
+socket died — DO NOT sweep >=300rps locally, the host runs out of cores
+for its own kubelet before the app fails). After that, Redis command
+latency spikes to 50-300ms UNDER LOAD (idle it's a clean 0.08us/<1ms) →
+DSP audience phase (per-auction Redis read) pins at the 500ms bid_timeout
+→ internal leg ~296ms/33% timeout → fanout p50 climbs to 400-730ms. This
+is NOT the code: campaign_loop (the shading fix) stays 12.9ms, CPU/mem
+fine, 0 sheds, and each soak STARTS clean (3-min fanout p50 18.3ms —
+better than the 27.7ms scenario-market baseline, proving the levers
+deliver) before degrading minutes in. The degradation SURVIVES both an
+rdctl VM restart AND a full stack-down/stack-up — it's host-level VZ-
+framework damage from the seizure, not a k8s state. stack-doctor reports
+"healthy" (it checks API/pods/ledger, not Redis latency under load) — a
+false green for perf. TO PIN THE BASELINE: full Mac reboot (surest) or a
+long host cooldown, THEN confirm Redis stays <1ms under a 2-min load
+probe BEFORE committing to the 30m soak, then pin BASELINE to 1755d082.
+The post-fix numbers we DID capture on a healthy host earlier: 150rps/4m
+fill ~95% fanout p95 208ms; 200rps/5m fanout p50 173ms @ 85.8% fill.
+
 ## Where the next gains live (attributed 2026-10-08 evening)
 
 CPU-by-pod at the ramp's 200rps stage: **postgres-0 = 1.08 cores, the #1
