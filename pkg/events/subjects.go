@@ -161,6 +161,13 @@ const (
 	// rebases within NATS RTT instead of the 30s poll.
 	SubjectCacheInvalidateAdvertiserBalances = "adtech.cache.invalidate.advertiser-balances"
 	SubjectCacheInvalidateSigningKeys        = "adtech.cache.invalidate.signing-keys"
+	// MarketplaceGrants: published by the gateway on grant purchase so
+	// reporting's grant-buyer skip set admits the new buyer within NATS RTT
+	// (the poll is the fallback bound). The skip set lets AccrueOnImpression
+	// return with ZERO Postgres work for the grant-less majority — the
+	// per-impression TX + RLS hatch + grants JOIN was ~28% of sampled PG
+	// time at 150rps (handoff 08 attribution, 2026-10-08).
+	SubjectCacheInvalidateMarketplaceGrants = "adtech.cache.invalidate.marketplace-grants"
 	// RouterStats: broadcast by the exchange's /debug routing reset so ALL
 	// exchange replicas wipe their SmartRouter state and rebase their
 	// reseed watermark (per-pod otherwise — an LB'd reset would leave N-1

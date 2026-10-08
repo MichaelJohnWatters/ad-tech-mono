@@ -162,8 +162,33 @@ func main() {
 			consumer.SetDataFeeAccrual(newDataFeeAccrual(dfDB,
 				func() float64 { return keys.Reporting.DataFeeMarginPct.Get(cfg) }, log))
 			// Data-marketplace surcharge settlement (PLAN Phase 10) shares the DB.
+			// The grant-buyer skip set spares the grant-less majority the
+			// per-impression TX (handoff 08: that probe was ~28% of PG time at
+			// 150rps). Wired ONLY after a successful initial load — an unloaded
+			// cache would skip-all and silently miss surcharges (money), so a
+			// failed Start degrades to today's always-TX path instead.
+			var grantBuyers *warm.Cache[string]
+			gbc := warm.New(warm.Config[string]{
+				Name:              "marketplace_grant_buyers",
+				Loader:            &grantBuyerLoader{db: dfDB},
+				Clock:             clk,
+				Bus:               connectInvalidateBus(cfg, log),
+				InvalidateSubject: events.SubjectCacheInvalidateMarketplaceGrants,
+				// 30s: the fallback staleness bound on a NEW grant's first
+				// surcharges when the purchase invalidate is missed. Growth of
+				// the set is the only money-relevant direction (shrink just
+				// re-proves the negative in the TX).
+				PollInterval: 30 * time.Second,
+				Log:          log,
+			})
+			if err := gbc.Start(context.Background()); err != nil {
+				log.Warn("grant-buyer skip set disabled (initial load failed) — surcharge accrual takes the full TX path", "error", err)
+			} else {
+				grantBuyers = gbc
+				lc.OnShutdown("grant-buyer-cache", func(_ context.Context) error { gbc.Stop(); return nil })
+			}
 			consumer.SetMarketplaceAccrual(newMarketplaceAccrual(dfDB,
-				func() float64 { return keys.Reporting.MarketplaceSurchargeMarginPct.Get(cfg) }, log))
+				func() float64 { return keys.Reporting.MarketplaceSurchargeMarginPct.Get(cfg) }, grantBuyers, log))
 			// OpenRTB burl billing notices share the DB too (burl_pending join).
 			consumer.SetBurlNotifier(newBurlNotifier(dfDB, log))
 		} else {

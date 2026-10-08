@@ -579,7 +579,7 @@ func main() {
 	}
 	mux.Handle(routes.APIMarketplaceListings, authMiddleware(http.HandlerFunc(marketplaceHandler(marketplaceStore, audStore, log))))
 	// Per-listing actions (POST .../{id}/purchase | /estimate) + the caller's grants.
-	mux.Handle(routes.APIMarketplaceListingsSub, authMiddleware(http.HandlerFunc(marketplaceListingActionHandler(marketplaceStore, audStore, gwDB, log))))
+	mux.Handle(routes.APIMarketplaceListingsSub, authMiddleware(http.HandlerFunc(marketplaceListingActionHandler(marketplaceStore, audStore, gwDB, secretsBus, log))))
 	mux.Handle(routes.APIMarketplaceGrants, authMiddleware(http.HandlerFunc(marketplaceGrantsHandler(marketplaceStore, log))))
 	mux.Handle(routes.APIMarketplaceEarnings, authMiddleware(http.HandlerFunc(marketplaceEarningsHandler(marketplaceStore, log))))
 	// Account closure + data export (PLAN Phase 11, item 105).

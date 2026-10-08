@@ -33,6 +33,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/cache/warm"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/store/analytics"
 )
 
@@ -40,14 +41,22 @@ type marketplaceAccrual struct {
 	db *sql.DB
 	// marginPctFn reads reporting.marketplace_surcharge_margin_pct live per accrual.
 	marginPctFn func() float64
+	// grantBuyers is the active-grant buyer skip set (warm, poll + NATS
+	// invalidate on purchase). An impression from a buyer NOT in the set
+	// returns before the TX — the grant-less majority costs zero Postgres.
+	// nil → skip-set disabled, every impression takes the full TX path
+	// (fail OPEN to correctness: we never skip on an unloaded cache).
+	// A too-LARGE set is always safe (the JOIN just matches nothing); only
+	// a too-small set could miss money, bounded by poll + invalidate.
+	grantBuyers *warm.Cache[string]
 	log         *slog.Logger
 }
 
-func newMarketplaceAccrual(db *sql.DB, marginPctFn func() float64, log *slog.Logger) *marketplaceAccrual {
+func newMarketplaceAccrual(db *sql.DB, marginPctFn func() float64, grantBuyers *warm.Cache[string], log *slog.Logger) *marketplaceAccrual {
 	if db == nil {
 		return nil
 	}
-	return &marketplaceAccrual{db: db, marginPctFn: marginPctFn, log: log}
+	return &marketplaceAccrual{db: db, marginPctFn: marginPctFn, grantBuyers: grantBuyers, log: log}
 }
 
 // AccrueOnImpression settles any marketplace surcharge for one impression.
@@ -59,15 +68,25 @@ func (a *marketplaceAccrual) AccrueOnImpression(ctx context.Context, e *analytic
 	if a == nil || e == nil || e.TraceID == "" || e.AccountID == "" || e.CampaignID == "" {
 		return
 	}
+	// Skip set: the vast majority of impressions belong to buyers with no
+	// active grant — for those, the TX below only ever proves a negative.
+	// One lock-free map hit replaces TX + hatch + JOIN (~28% of PG time at
+	// 150rps before this, handoff 08). Only consulted when the cache exists
+	// (wired only after a successful initial load — see main.go).
+	if a.grantBuyers != nil {
+		if _, ok := a.grantBuyers.ByID(e.AccountID); !ok {
+			return
+		}
+	}
 	// The whole settlement runs in ONE platform-hatch tx: the grant+targeting
 	// JOIN doubles as the probe AND the cross-tenant read/write (debit buyer,
 	// credit seller, book platform margin). marketplace_grants has RLS (slice 2),
 	// so the read MUST be under the hatch — a bare read on the app-role pool sees
 	// zero rows and silently no-ops. The tenant_isolation policies are USING-only,
-	// so platform_read admits both the read and the writes (security #77). Perf
-	// note: this is a tx per impression (no cheap non-tx probe, unlike data-fee's
-	// no-RLS pending table) — cache the small "advertisers with grants" set in
-	// reporting to skip the tx for the grant-less majority if volume warrants.
+	// so platform_read admits both the read and the writes (security #77). Perf:
+	// the grant-less majority never reaches this TX — the skip set above
+	// (grantBuyerLoader) is the "cache the small advertisers-with-grants set"
+	// this comment used to defer; volume warranted it (handoff 08).
 	tx, err := a.db.BeginTx(ctx, nil)
 	if err != nil {
 		a.log.Error("marketplace surcharge begin failed", "trace_id", e.TraceID, "error", err)
@@ -197,3 +216,46 @@ ON CONFLICT (account_id) DO UPDATE
 			"segments", settled, "margin_pct", fmt.Sprintf("%.1f", marginPct))
 	}
 }
+
+// grantBuyerLoader feeds the grant-buyer skip set: the distinct buyer
+// account ids holding an ACTIVE, unexpired marketplace grant. Tiny result
+// (buyers-with-grants, not grants), reloaded on the warm cache's poll tick
+// and on the gateway's purchase invalidate.
+//
+// marketplace_grants has RLS (USING-only tenant_isolation policies), so the
+// read runs under the platform_read hatch inside a TX — set_config(..., true)
+// is tx-local, which keeps the hatch off the shared pool connections
+// (same posture as AccrueOnImpression's settlement TX).
+type grantBuyerLoader struct {
+	db *sql.DB
+}
+
+func (l *grantBuyerLoader) LoadAll(ctx context.Context) ([]string, error) {
+	tx, err := l.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("grant-buyer load begin: %w", err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `SELECT set_config('app.platform_read', 'on', true)`); err != nil {
+		return nil, fmt.Errorf("grant-buyer load hatch: %w", err)
+	}
+	rows, err := tx.QueryContext(ctx, `
+SELECT DISTINCT buyer_account_id::text
+FROM marketplace_grants
+WHERE status = 'active' AND (expires_at IS NULL OR expires_at > now())`)
+	if err != nil {
+		return nil, fmt.Errorf("grant-buyer load query: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("grant-buyer load scan: %w", err)
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+func (l *grantBuyerLoader) KeyOf(id string) string { return id }

@@ -20,6 +20,7 @@ import (
 	audiencepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/audience/store/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/audit"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/auth"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/events"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/marketplace"
 	marketplacepg "github.com/MichaelJohnWatters/ad-tech-mono/pkg/marketplace/postgres"
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/middleware"
@@ -193,7 +194,7 @@ type marketplaceEstimateResponse struct {
 // marketplaceListingActionHandler dispatches per-listing subtree actions:
 // POST /v1/api/marketplace/listings/{id}/purchase (slice 2) and
 // POST /v1/api/marketplace/listings/{id}/estimate  (slice 4).
-func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audiencepg.Store, auditDB *sql.DB, log *slog.Logger) http.HandlerFunc {
+func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audiencepg.Store, auditDB *sql.DB, bus events.EventBus, log *slog.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		claims := middleware.ClaimsFromContext(r.Context())
 		if claims == nil {
@@ -239,7 +240,7 @@ func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audie
 
 		switch action {
 		case "purchase":
-			marketplaceDoPurchase(w, r, store, listing, claims, accountID, auditDB, log)
+			marketplaceDoPurchase(w, r, store, listing, claims, accountID, auditDB, bus, log)
 		case "estimate":
 			marketplaceDoEstimate(w, r, audStore, listing, claims, accountID, log)
 		default:
@@ -249,7 +250,7 @@ func marketplaceListingActionHandler(store *marketplacepg.Store, audStore *audie
 }
 
 // marketplaceDoPurchase (slice 2): the caller buys targeting access → a grant.
-func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *marketplacepg.Store, listing *marketplace.Listing, claims *auth.Claims, accountID string, auditDB *sql.DB, log *slog.Logger) {
+func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *marketplacepg.Store, listing *marketplace.Listing, claims *auth.Claims, accountID string, auditDB *sql.DB, bus events.EventBus, log *slog.Logger) {
 	if !canAs(r, claims, "marketplace:buy") {
 		http.Error(w, `{"error":"forbidden"}`, http.StatusForbidden)
 		return
@@ -271,6 +272,14 @@ func marketplaceDoPurchase(w http.ResponseWriter, r *http.Request, store *market
 		return
 	}
 	log.Info("marketplace purchase", "grant", id, "listing", listing.ID, "buyer", accountID, "seller", listing.AccountID)
+	// Tell reporting's grant-buyer skip set about the new buyer NOW — until
+	// it lands, this buyer's impressions are skipped before the surcharge TX
+	// (money), so the invalidate is what closes that window to NATS RTT; the
+	// cache's 30s poll is the fallback bound if the publish is lost.
+	if bus != nil {
+		_ = bus.Publish(r.Context(), events.SubjectCacheInvalidateMarketplaceGrants,
+			[]byte(`{"source":"gateway","grant":"`+id+`"}`))
+	}
 	// Money action (drives the buyer-debit / seller-credit CPM surcharge
 	// settlement) — audit the grant against the buyer account.
 	_ = audit.Log(r.Context(), auditDB, audit.Entry{
