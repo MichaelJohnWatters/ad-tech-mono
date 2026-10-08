@@ -94,6 +94,16 @@ type Tracker struct {
 	mu    sync.RWMutex
 	data  map[string][]Record // pooled, key: placement_id — drives shading
 	byAdv map[string][]Record // reporting, key: advKey(placement, advertiser)
+	// curves caches the built Curve per placement so the bid loop's
+	// per-candidate WinRateCurve call is a lock-free read instead of an
+	// O(records) rebuild under t.mu. Writers invalidate on append; the next
+	// reader rebuilds. A rebuild racing an invalidation may re-store a curve
+	// that's stale by one record — bounded by the next win/loss notice on
+	// that placement, which is fine for a learning curve (and infinitely
+	// better than the 2026-10-08 incident this cache exists to prevent:
+	// per-candidate rebuilds under RLock convoyed with the notice writers
+	// and OOM'd the DSP — docs/handoffs/08-dsp-oom-shading-convoy.md).
+	curves sync.Map // placement_id → Curve
 }
 
 // NewTracker creates a win/loss tracker.
@@ -139,24 +149,26 @@ func (t *Tracker) RecordWinShaded(placementID, advertiserID string, ourBid, clea
 func (t *Tracker) recordWin(placementID, advertiserID string, ourBid, clearingPrice, savings float64) {
 	rec := Record{OurBid: ourBid, ClearingPrice: clearingPrice, Won: true, Savings: savings}
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.data[placementID] = appendBounded(t.data[placementID], rec)
 	if advertiserID != "" {
 		k := advKey(placementID, advertiserID)
 		t.byAdv[k] = appendBounded(t.byAdv[k], rec)
 	}
+	t.mu.Unlock()
+	t.curves.Delete(placementID)
 }
 
 // RecordLoss records a losing bid. advertiserID may be "" (pooled tally only).
 func (t *Tracker) RecordLoss(placementID, advertiserID string, ourBid, clearingPrice float64, reason LossReason) {
 	rec := Record{OurBid: ourBid, ClearingPrice: clearingPrice, Won: false, Reason: reason}
 	t.mu.Lock()
-	defer t.mu.Unlock()
 	t.data[placementID] = appendBounded(t.data[placementID], rec)
 	if advertiserID != "" {
 		k := advKey(placementID, advertiserID)
 		t.byAdv[k] = appendBounded(t.byAdv[k], rec)
 	}
+	t.mu.Unlock()
+	t.curves.Delete(placementID)
 }
 
 // statsFromRecords aggregates a record slice. Shared by the pooled Stats and the
@@ -234,9 +246,28 @@ type PlacementStats struct {
 	TotalSavings float64
 }
 
-// WinRateCurve builds a win-rate curve for a placement.
-// Groups bids into price buckets and calculates win rate at each level.
+// WinRateCurve returns the win-rate curve for a placement. The common case is
+// a lock-free cache hit: the bid loop calls this once per shading-enabled
+// candidate (~dozens per request), while the curve only changes when a win/
+// loss notice lands. Cache miss → rebuild under RLock, store, return.
+//
+// The rebuild must NOT call t.Stats()/other RLock-taking methods while
+// holding t.mu: a recursive RLock with a writer waiting in between is the
+// documented sync.RWMutex deadlock, and exactly that wedged every DSP pod on
+// 2026-10-08 (handoff 08). Midpoint comes from statsFromRecords on the
+// records already in hand.
 func (t *Tracker) WinRateCurve(placementID string) Curve {
+	if c, ok := t.curves.Load(placementID); ok {
+		return c.(Curve)
+	}
+	curve := t.buildCurve(placementID)
+	t.curves.Store(placementID, curve)
+	return curve
+}
+
+// buildCurve groups bids into price buckets and calculates win rate at each
+// level. Cold path — only on the first read after a win/loss invalidation.
+func (t *Tracker) buildCurve(placementID string) Curve {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
@@ -273,12 +304,10 @@ func (t *Tracker) WinRateCurve(placementID string) Curve {
 		})
 	}
 
-	// Estimate midpoint (50% win rate) via linear interpolation
-	var midpoint float64
-	if len(records) > 0 {
-		stats := t.Stats(placementID)
-		midpoint = stats.AvgClearing
-	}
+	// Midpoint estimate: average clearing price over the same records.
+	// Computed inline — NOT via t.Stats(), which takes t.mu again (see the
+	// WinRateCurve doc comment for why that recursive RLock is forbidden).
+	midpoint := statsFromRecords(records).AvgClearing
 
 	return Curve{Points: points, Midpoint: midpoint}
 }

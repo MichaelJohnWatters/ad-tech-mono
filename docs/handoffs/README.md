@@ -3,9 +3,13 @@
 Each file is a self-contained prompt for a future session. Status lives in
 a `> **DONE/PROGRESS**` banner at the top of each file.
 
-## Roadmap (agreed 2026-08-07)
+## Roadmap (agreed 2026-08-07; amended 2026-10-08)
 
-1. **03-staging.md** — NEXT. First deploy off the laptop. The themed demo
+0. **08-dsp-oom-shading-convoy.md** — NOW FIRST: dsp-internal OOM
+   crash-loops under 110rps load (RWMutex convoy on the shading tracker).
+   Root-caused 2026-10-08, fixes pending — blocks every perf number until
+   shipped. Note: autoscaling left OFF pending the fix session.
+1. **03-staging.md** — First deploy off the laptop. The themed demo
    world from 07 makes staging presentable. 1-2 sessions + cloud cost.
 2. **04-product-gaps.md** — Privacy Sandbox ARA + PLAN phases 10-12.
    The feature arc after the platform story is solid end-to-end.

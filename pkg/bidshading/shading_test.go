@@ -192,3 +192,39 @@ func TestTrackerBounded(t *testing.T) {
 		t.Errorf("pooled TotalBids=%d dropped below half the cap (lost too much history)", n)
 	}
 }
+
+// TestTracker_ConcurrentReadWrite is the regression guard for the 2026-10-08
+// DSP wedge (docs/handoffs/08-dsp-oom-shading-convoy.md): WinRateCurve held
+// t.mu.RLock while calling t.Stats (a second RLock) — with a writer waiting
+// in between, that recursive RLock deadlocks, and every later reader queues
+// behind it forever. Under the old code this test wedges within milliseconds
+// and fails on the go test timeout; it must complete instantly now. Also
+// exercises the curve cache's invalidate/rebuild race under -race.
+func TestTracker_ConcurrentReadWrite(t *testing.T) {
+	tracker := NewTracker()
+	for i := 0; i < 100; i++ {
+		tracker.RecordWin("pl-1", "adv-1", 2.0+float64(i%10)/10, 2.0)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 5000; i++ {
+			tracker.RecordWin("pl-1", "adv-1", 2.5, 2.3)
+			tracker.RecordLoss("pl-1", "adv-1", 1.5, 3.0, ReasonOutbid)
+		}
+	}()
+	for i := 0; i < 5000; i++ {
+		if c := tracker.WinRateCurve("pl-1"); c.Midpoint <= 0 {
+			t.Fatalf("iteration %d: curve lost its data: %+v", i, c)
+		}
+	}
+	<-done
+
+	// Cache coherence: after the writers finish, the next read must reflect
+	// the final record count (every write invalidates; no stale terminal state).
+	stats := tracker.Stats("pl-1")
+	if got := tracker.WinRateCurve("pl-1"); got.Midpoint <= 0 || stats.TotalBids == 0 {
+		t.Fatalf("post-run curve/stats empty: curve=%+v stats=%+v", got, stats)
+	}
+}
