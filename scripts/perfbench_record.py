@@ -55,6 +55,13 @@ def phase_ms(q, metric):
     return query(f"1000 * histogram_quantile({q}, sum by (le) (rate({metric}[{W}])))")
 
 
+def l1_hit(vis):
+    h = f'sum(increase(adtech_audience_l1_cache_hits_total{{visibility="{vis}"}}[{W}]))'
+    m = f'sum(increase(adtech_audience_l1_cache_misses_total{{visibility="{vis}"}}[{W}]))'
+    v = query(f"100 * {h} / ({h} + {m})")
+    return None if v is None or v != v else v  # NaN (0/0, cache off) → None
+
+
 log = open(sys.argv[1]).read()
 
 
@@ -90,6 +97,12 @@ entry = {
     "ssp_render_p95_ms": phase_ms(0.95, 'adtech_ssp_serve_phase_duration_seconds_bucket{phase="render"}'),
     "dsp_campaign_loop_p95_ms": phase_ms(0.95, 'adtech_bid_phase_duration_seconds_bucket{phase="campaign_loop"}'),
     "dsp_audience_p95_ms": phase_ms(0.95, 'adtech_bid_phase_duration_seconds_bucket{phase="audience"}'),
+    "dsp_audience_p50_ms": phase_ms(0.50, 'adtech_bid_phase_duration_seconds_bucket{phase="audience"}'),
+    "ssp_pre_auction_segments_p95_ms": phase_ms(0.95, 'adtech_ssp_serve_phase_duration_seconds_bucket{phase="pre_auction_segments"}'),
+    # Audience L1 cache hit % per visibility (None when the cache is off —
+    # the A/B discriminator for the per-auction Redis read).
+    "audience_l1_hit_pct_dsp": l1_hit("dsp_private"),
+    "audience_l1_hit_pct_ssp": l1_hit("public"),
     "adserver_freqcap_p95_ms": phase_ms(0.95, 'adtech_adserver_serve_phase_duration_seconds_bucket{phase="freqcap"}'),
     "cluster_cpu_pct": query(f'100 * sum(rate(node_cpu_seconds_total{{mode!="idle"}}[{W}])) / count(node_cpu_seconds_total{{mode="idle"}})'),
     "irq_pct": query(f'100 * sum(rate(node_cpu_seconds_total{{mode=~"irq|softirq"}}[{W}])) / count(node_cpu_seconds_total{{mode="idle"}})'),

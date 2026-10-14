@@ -27,6 +27,7 @@ RPS=${RPS:-110}
 RPS_STAGES=${RPS_STAGES:-$RPS}
 DURATION=${DURATION:-30m}
 PURGE=${PURGE:-0}
+PROFILE=${PROFILE:-1}   # 1 = capture pprof from every hot-path pod at mid-run (scripts/perfprofile.sh)
 NOTE=${NOTE:-}
 NS=adtech
 LEDGER=docs/perf/runs.jsonl
@@ -66,10 +67,19 @@ run_stage() {
   done
 
   echo "-- load (hands off the host) --"
-  local start end verify=GREEN
+  local start end verify=GREEN prof_pid="" prof_dir
+  prof_dir=/tmp/perfbench-pprof-rps${rps}
+  rm -rf "$prof_dir"
+  if [ "$PROFILE" = "1" ]; then
+    # Mid-run capture: steady state, clear of warm-up and drain.
+    local secs=${DURATION%m}; secs=$((secs * 60 / 2))
+    DELAY=$secs scripts/perfprofile.sh "$prof_dir" >/tmp/perfbench-pprof-rps${rps}.log 2>&1 &
+    prof_pid=$!
+  fi
   start=$(date +%s)
   make loadtest RPS="$rps" DURATION="$DURATION" VERIFY=1 >"$log" 2>&1 || verify=RED
   end=$(date +%s)
+  [ -n "$prof_pid" ] && wait "$prof_pid"
 
   echo "-- record + archive --"
   start_pf
@@ -83,6 +93,11 @@ run_stage() {
   START=$start END=$end RPS_STAGE=$rps CANARY=$canary SHA=$sha STAMP=$stamp \
   DURATION=$DURATION NOTE=$NOTE VERIFY_STATUS=$verify LEDGER=$LEDGER RESULTS=$RESULTS \
     python3 scripts/perfbench_record.py "$log"
+  if [ -d "$prof_dir" ]; then
+    mkdir -p "perf-archives/${stamp}-rps${rps}"
+    mv "$prof_dir" "perf-archives/${stamp}-rps${rps}/pprof"
+    echo "-- pprof: perf-archives/${stamp}-rps${rps}/pprof/SUMMARY.txt"
+  fi
   stop_pf
 }
 
