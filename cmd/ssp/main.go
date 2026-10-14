@@ -16,7 +16,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -131,6 +130,10 @@ func main() {
 		Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
 	}, []string{"phase"})
 	metrics.Registry().MustRegister(sspServePhases)
+
+	// OpenRTB tmax stamped on every bid request to the exchange (live), which
+	// the exchange now honours as the auction budget.
+	sspTMaxFn = config.NewLiveDuration(sc.Manager, cfg, keys.SSP.TMax.Key(), keys.SSP.TMax.Default()).Value
 
 	// Audience L1 cache (Phase 1, default ON, live kill-switch) in front of the
 	// per-auction public-segment Redis lookup; the Step-0 probe stays wired
@@ -499,7 +502,7 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 			Keywords:  r.URL.Query().Get("keywords"), // comma-separated page keywords
 			Publisher: &openrtb.Publisher{ID: p.PublisherID},
 		},
-		TMax: 100,
+		TMax: int(sspTMaxFn().Milliseconds()),
 	}
 	// Blocked advertiser domains (OpenRTB badv): the CTV pod path passes the
 	// advertisers already selected into the pod so this sub-auction excludes
@@ -673,61 +676,38 @@ func runSSPAuction(w http.ResponseWriter, r *http.Request, log *slog.Logger, pla
 		// anonymous included, so an unbounded query here would be a hot-path
 		// latency risk).
 		if audienceStore != nil && (lookupKey != "" || householdID != "" || hashedEmail != "") {
-			// The two lookups are independent reads, so they run CONCURRENTLY
-			// under the shared 25ms budget (serialized they were worst-case
-			// 2×25ms — and before the Redis client honoured ctx deadlines on
-			// the wire, this block was most of pre_auction's 237ms p95).
-			// Sub-phase histogram pins that decomposition on the dashboard.
+			// ONE batched lookup for every key this request carries — user,
+			// household (hh:-prefixed members; private household segments are
+			// the DSP's own lookup) and first-party hashed email (CRM uploads,
+			// keyed by the raw sha256 the SDK forwards) — under the shared 25ms
+			// budget. Through the L1 cache, hits never leave the process and the
+			// misses go to Redis as one pipelined round trip. (Was three
+			// goroutines = three round trips; serialized before that, it was
+			// most of pre_auction's 237ms p95.) Sub-phase histogram pins it.
 			segStart := time.Now()
 			segCtx, cancelSeg := context.WithTimeout(ctx, 25*time.Millisecond)
 			var userSegs, hhSegs, heSegs []string
-			var wg sync.WaitGroup
-			if lookupKey != "" {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					looked, err := audienceStore.SegmentsForUser(segCtx, lookupKey)
-					if err != nil {
-						reqLog.Warn("segment lookup failed (degrading to none)", "user_key", lookupKey, "error", err)
-					} else {
-						userSegs = looked
-					}
-				}()
+			var keys []string
+			var dst []*[]string // where each key's result lands (index-aligned with keys)
+			for _, kd := range []struct {
+				key string
+				out *[]string
+			}{{lookupKey, &userSegs}, {householdID, &hhSegs}, {hashedEmail, &heSegs}} {
+				if kd.key != "" {
+					keys = append(keys, kd.key)
+					dst = append(dst, kd.out)
+				}
 			}
-			// Public household segments: same lookup, keyed by the household
-			// id (audience members carry the hh: prefix). Private household
-			// segments are the DSP's own lookup — mirrors the user
-			// public/private split.
-			if householdID != "" {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					looked, err := audienceStore.SegmentsForUser(segCtx, householdID)
-					if err != nil {
-						reqLog.Warn("household segment lookup failed (degrading to none)", "household", householdID, "error", err)
-					} else {
-						hhSegs = looked
-					}
-				}()
-			}
-			// First-party / CRM audience: segments onboarded by hashed email
-			// (e.g. a "diamond intenders" list uploaded via /v1/api/audiences).
-			// Keyed by the raw sha256 the SDK forwards, so an uploaded member and
-			// this visitor line up without any identity-graph round-trip.
-			if hashedEmail != "" {
-				wg.Add(1)
-				go func() {
-					defer wg.Done()
-					looked, err := audienceStore.SegmentsForUser(segCtx, hashedEmail)
-					if err != nil {
-						reqLog.Warn("hashed-email segment lookup failed (degrading to none)", "error", err)
-					} else {
-						heSegs = looked
-					}
-				}()
-			}
-			wg.Wait()
+			sets, err := audstore.SegmentsForUsers(segCtx, audienceStore, keys)
 			cancelSeg()
+			if err != nil {
+				reqLog.Warn("segment lookup failed (degrading to none)", "keys", len(keys), "error", err)
+			}
+			for i := range dst {
+				if i < len(sets) {
+					*dst[i] = sets[i]
+				}
+			}
 			segs = append(userSegs, hhSegs...)
 			segs = append(segs, heSegs...)
 			obsServePhase("pre_auction_segments", segStart)
@@ -993,6 +973,11 @@ var downstreamEventPressure atomic.Int64
 // call; auction = the exchange round-trip; render = adserve + response build.
 // Set in main once the metrics registry exists; nil-checked for tests.
 var sspServePhases *prometheus.HistogramVec
+
+// sspTMaxFn returns the OpenRTB tmax for outbound bid requests (ssp.tmax,
+// live). Package-level like sspServePhases: set once in main, read per auction
+// without growing runSSPAuction's signature. Default matches the key default.
+var sspTMaxFn = func() time.Duration { return 525 * time.Millisecond }
 
 // obsServePhase records t→now under phase and returns a fresh mark.
 func obsServePhase(phase string, t time.Time) time.Time {

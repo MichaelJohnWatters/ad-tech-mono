@@ -97,6 +97,24 @@ func (p *Probe) DSPSegmentsForUser(ctx context.Context, userID string) ([]string
 	return p.inner.DSPSegmentsForUser(ctx, userID)
 }
 
+// SegmentsForUsers records each would-be public lookup then delegates the
+// batch unchanged.
+func (p *Probe) SegmentsForUsers(ctx context.Context, userIDs []string) ([][]string, error) {
+	for _, id := range userIDs {
+		p.record(&p.pub, id, true)
+	}
+	return audstore.SegmentsForUsers(ctx, p.inner, userIDs)
+}
+
+// DSPSegmentsForUsers records each would-be dsp_private lookup then delegates
+// the batch unchanged (keeps the inner chain's DSPBatchLookup reachable).
+func (p *Probe) DSPSegmentsForUsers(ctx context.Context, userIDs []string) ([][]string, error) {
+	for _, id := range userIDs {
+		p.record(&p.priv, id, false)
+	}
+	return audstore.DSPSegmentsForUsers(ctx, p.inner, userIDs)
+}
+
 func (p *Probe) record(shards *[numShards]shard, userID string, public bool) {
 	// Disabled is the common case: one atomic read (LiveBool) + return.
 	if userID == "" || !p.enabled() {

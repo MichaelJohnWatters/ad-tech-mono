@@ -15,6 +15,7 @@ func SSPSchema() []config.SchemaEntry { return sspSet.Entries() }
 var SSP = struct {
 	ExchangeURL                config.StringKey
 	AdserverURL                config.StringKey
+	TMax                       config.DurationKey
 	WarmPublishersPollInterval config.DurationKey
 	WarmPlacementsPollInterval config.DurationKey
 	SellerDomain               config.StringKey
@@ -40,6 +41,7 @@ var SSP = struct {
 }{
 	ExchangeURL:                sspSet.String("ssp.exchange_url", "http://localhost:8081", config.TierStatic, "Where the SSP sends bid requests. Points at the exchange; change to redirect SSP traffic to a different exchange instance.", config.Since("v1.0")),
 	AdserverURL:                sspSet.String("ssp.adserver_url", "http://localhost:8085", config.TierStatic, "Where /v1/ssp/serve fetches rendered creative HTML after an auction win. Points at the ad server.", config.Since("v1.2")),
+	TMax:                       sspSet.Duration("ssp.tmax", "525ms", config.TierLive, "OpenRTB tmax the SSP stamps on its bid requests to the exchange (whole auction budget, ms precision). The exchange honours it: its DSP fan-out deadline becomes min(exchange.bid_timeout, tmax - exchange.tmax_margin). 525ms = the local 500ms bid_timeout + the 25ms default margin, so the effective fan-out deadline is unchanged; lower it to tighten auctions end-to-end without touching the exchange. Was a hard-coded, unenforced 100.", config.Since("v2.8")),
 	WarmPublishersPollInterval: sspSet.Duration("cache.warm.publishers.poll_interval", "30s", config.TierStatic, "How often the in-memory publisher cache refreshes from Postgres. Controls how quickly newly enabled publishers start receiving bid requests.", config.Since("v1.1")),
 	WarmPlacementsPollInterval: sspSet.Duration("cache.warm.placements.poll_interval", "30s", config.TierStatic, "How often the in-memory placement cache refreshes from Postgres. Affects how quickly floor-price and format edits take effect.", config.Since("v1.1")),
 	SellerDomain:               sspSet.String("ssp.seller_domain", "", config.TierStatic, "This platform's advertising-system domain, emitted as the asi of the first SupplyChain (schain) node on outbound bid requests. Should match the host serving sellers.json. Empty disables schain origination.", config.Since("v1.3")),

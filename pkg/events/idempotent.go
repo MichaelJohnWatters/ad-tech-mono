@@ -29,6 +29,38 @@ type DedupStore interface {
 	UnmarkProcessed(ctx context.Context, key string) error
 }
 
+// BatchDedupStore is an optional DedupStore capability: MarkProcessed for many
+// keys in ONE round trip (a pipeline, executed in order — so a key repeated
+// within the batch is new only at its first position, exactly like N serial
+// calls). Batch consumers otherwise paid one sequential Redis SETNX per
+// message (two with a business key), which capped reporting's consumer
+// throughput below the offered event rate (2026-10-14: 580k dsp_call +
+// 144k impression pending at 150rps).
+type BatchDedupStore interface {
+	MarkProcessedMany(ctx context.Context, keys []string, ttl time.Duration) ([]bool, error)
+}
+
+// MarkProcessedMany uses d's batch capability when present, else serial
+// MarkProcessed (first error aborts — callers fail closed on it). On error
+// the returned slice still marks (true) the keys THIS call newly set, so the
+// caller releases exactly those — never a pre-existing marker, which would
+// let a genuine duplicate through on redelivery. Implementations must honour
+// the same contract.
+func MarkProcessedMany(ctx context.Context, d DedupStore, keys []string, ttl time.Duration) ([]bool, error) {
+	if b, ok := d.(BatchDedupStore); ok {
+		return b.MarkProcessedMany(ctx, keys, ttl)
+	}
+	out := make([]bool, len(keys))
+	for i, k := range keys {
+		isNew, err := d.MarkProcessed(ctx, k, ttl)
+		if err != nil {
+			return out, err
+		}
+		out[i] = isNew
+	}
+	return out, nil
+}
+
 // IdempotentHandler wraps a Handler with deduplication logic.
 // If a message has already been processed (based on message ID),
 // it is acked silently without calling the inner handler.

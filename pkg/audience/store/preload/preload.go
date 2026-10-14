@@ -79,6 +79,30 @@ func (p *Preloader) DSPSegmentsForUser(ctx context.Context, userID string) ([]st
 	return p.lookup(ctx, userID, "dsp_private")
 }
 
+// DSPSegmentsForUsers / SegmentsForUsers read many users' sets in one
+// pipelined round trip (audstore batch capabilities). A Redis failure degrades
+// to all-empty, like the single-id path.
+func (p *Preloader) DSPSegmentsForUsers(ctx context.Context, userIDs []string) ([][]string, error) {
+	return p.lookupMany(ctx, userIDs, "dsp_private")
+}
+
+func (p *Preloader) SegmentsForUsers(ctx context.Context, userIDs []string) ([][]string, error) {
+	return p.lookupMany(ctx, userIDs, "public")
+}
+
+func (p *Preloader) lookupMany(ctx context.Context, userIDs []string, visibility string) ([][]string, error) {
+	keys := make([]string, len(userIDs))
+	for i, id := range userIDs {
+		keys[i] = setRedisKey(id, visibility)
+	}
+	sets, err := cache.SMembersMulti(ctx, p.l2, keys)
+	if err != nil {
+		p.log.Debug("audience cache batch read failed", "ids", len(userIDs), "visibility", visibility, "error", err)
+		return make([][]string, len(userIDs)), nil
+	}
+	return sets, nil
+}
+
 func (p *Preloader) lookup(ctx context.Context, userID, visibility string) ([]string, error) {
 	if userID == "" {
 		return nil, nil

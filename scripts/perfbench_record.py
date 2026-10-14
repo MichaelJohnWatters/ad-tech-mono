@@ -71,6 +71,20 @@ def leg_p95_by_dsp():
     return dict(sorted(out.items()))
 
 
+def by_label(expr, label):
+    """{label_value: value} for a vector query ({} on error / pre-metric)."""
+    try:
+        res = prom_get("/api/v1/query", query=expr, time=TS)["data"]["result"]
+    except Exception:
+        return {}
+    out = {}
+    for r in res:
+        v = float(r["value"][1])
+        if v == v:
+            out[r["metric"].get(label, "?")] = round(v, 2)
+    return dict(sorted(out.items()))
+
+
 def l1_hit(vis):
     h = f'sum(increase(adtech_audience_l1_cache_hits_total{{visibility="{vis}"}}[{W}]))'
     m = f'sum(increase(adtech_audience_l1_cache_misses_total{{visibility="{vis}"}}[{W}]))'
@@ -120,7 +134,46 @@ entry = {
     "audience_l1_hit_pct_dsp": l1_hit("dsp_private"),
     "audience_l1_hit_pct_ssp": l1_hit("public"),
     "dsp_leg_p95_ms": leg_p95_by_dsp(),
+    "dsp_leg_p50_ms": by_label(
+        "1000 * histogram_quantile(0.50, sum by (dsp_endpoint, le) "
+        f"(rate(adtech_exchange_dsp_leg_duration_seconds_bucket[{W}])))", "dsp_endpoint"),
+    # Router skip rate per bidder = 100 - (legs called / auctions that reached
+    # fan-out). Expect the scenario slowpoke + deadbeat at ~99 (ε-probe ~1%),
+    # the healthy bidders at ~0. A skip-rule regression shows here first.
+    "dsp_skip_pct": by_label(
+        "100 - 100 * sum by (dsp_endpoint) (rate(adtech_exchange_dsp_leg_duration_seconds_count"
+        f"[{W}])) / scalar(sum(rate(adtech_auction_phase_duration_seconds_count{{phase=\"fanout\"}}[{W}])))",
+        "dsp_endpoint"),
+    "dsp_leg_timeout_pct": by_label(
+        f'100 * sum by (dsp_endpoint) (rate(adtech_exchange_dsp_leg_duration_seconds_count{{outcome="timeout"}}[{W}])) '
+        f"/ sum by (dsp_endpoint) (rate(adtech_exchange_dsp_leg_duration_seconds_count[{W}]))", "dsp_endpoint"),
+    # Per-channel deadline trade-off (the per-channel timeout A/B readout).
+    # Exchange-side fill per channel (winner / all auctions on that channel).
+    # The headline fill_pct is the simulator's client-counted view.
+    "fill_pct_by_channel": by_label(
+        f'100 * sum by (channel) (rate(adtech_auctions_total{{result="winner"}}[{W}])) '
+        f"/ sum by (channel) (rate(adtech_auctions_total[{W}]))", "channel"),
+    "fanout_deadline_ms_by_channel": by_label(
+        f"1000 * sum by (channel) (rate(adtech_exchange_fanout_deadline_seconds_sum[{W}])) "
+        f"/ sum by (channel) (rate(adtech_exchange_fanout_deadline_seconds_count[{W}]))", "channel"),
+    "leg_timeout_pct_by_channel": by_label(
+        f'100 * sum by (channel) (rate(adtech_exchange_dsp_leg_duration_seconds_count{{outcome="timeout"}}[{W}])) '
+        f"/ sum by (channel) (rate(adtech_exchange_dsp_leg_duration_seconds_count[{W}]))", "channel"),
     "adserver_freqcap_p95_ms": phase_ms(0.95, 'adtech_adserver_serve_phase_duration_seconds_bucket{phase="freqcap"}'),
+    # Redis is single-threaded: ~1.0 core here = saturated (the freq-cap /
+    # audience tail is then Redis capacity). Throttle % > 0 = its CPU LIMIT
+    # is starving it even below a full core. Pod-level cAdvisor series.
+    "redis_cpu_cores_avg": query(f'sum(rate(container_cpu_usage_seconds_total{{pod=~"redis-.*"}}[{W}]))'),
+    "redis_cpu_cores_max": query(f'max_over_time(sum(rate(container_cpu_usage_seconds_total{{pod=~"redis-.*"}}[1m]))[{W}:15s])'),
+    "redis_throttled_pct": query(f'100 * sum(rate(container_cpu_cfs_throttled_periods_total{{pod=~"redis-.*"}}[{W}])) / sum(rate(container_cpu_cfs_periods_total{{pod=~"redis-.*"}}[{W}]))'),
+    # JetStream backlog: total pending across consumers — peak during the run
+    # and at record time (post-run). A large end value = consumers behind the
+    # offered rate (VERIFY can read RED mid-drain); per-consumer top list says
+    # which. reporting's dsp_call consumer lagging also staleness the router
+    # reseed aggregate.
+    "jetstream_pending_max": query(f"max_over_time(sum(jetstream_consumer_num_pending)[{W}:15s])"),
+    "jetstream_pending_end": query("sum(jetstream_consumer_num_pending)"),
+    "jetstream_pending_top": by_label("topk(5, jetstream_consumer_num_pending)", "consumer_name"),
     "cluster_cpu_pct": query(f'100 * sum(rate(node_cpu_seconds_total{{mode!="idle"}}[{W}])) / count(node_cpu_seconds_total{{mode="idle"}})'),
     "irq_pct": query(f'100 * sum(rate(node_cpu_seconds_total{{mode=~"irq|softirq"}}[{W}])) / count(node_cpu_seconds_total{{mode="idle"}})'),
     "mem_avail_floor_gib": (lambda v: round(v / 2**30, 2) if v else None)(

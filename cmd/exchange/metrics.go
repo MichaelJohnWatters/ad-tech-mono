@@ -15,7 +15,9 @@ type auctionMetrics struct {
 	// Pipeline Health dashboard's fill-rate panel divides over.
 	// Labels:
 	//   result = "winner" | "no_bids" | "all_below_floor" | "no_winner"
-	//   channel = the auction channel (display, video, all, …)
+	//   channel = the REQUEST's routing channel (display, video, native,
+	//   audio, ctv, …) — per-channel fill = winner / total by channel. (Was
+	//   the exchange's configured restriction, i.e. always "all" locally.)
 	auctionsTotal *prometheus.CounterVec
 
 	// Bids RECEIVED by the exchange, broken down per DSP endpoint and
@@ -55,6 +57,13 @@ type auctionMetrics struct {
 	// outcome = bid|no_bid|error|timeout. Bounded cardinality: configured
 	// endpoints × channels × 4.
 	dspLegDuration *prometheus.HistogramVec
+
+	// Effective DSP fan-out deadline each auction actually got, per channel:
+	// exchange.bid_timeout_by_channel override (else bid_timeout), capped by
+	// tmax − exchange.tmax_margin. Makes the per-channel / tmax settings
+	// visible live; pair with dspLegDuration{outcome="timeout"} for the
+	// deadline-vs-timeouts trade-off.
+	fanoutDeadline *prometheus.HistogramVec
 }
 
 func newAuctionMetrics(reg *prometheus.Registry) *auctionMetrics {
@@ -91,12 +100,18 @@ func newAuctionMetrics(reg *prometheus.Registry) *auctionMetrics {
 			Help:      "Per-DSP fan-out leg latency seen by the exchange. outcome=bid|no_bid|error|timeout (timeout = still in flight at the fan-out deadline, observed at the deadline).",
 			Buckets:   []float64{.001, .0025, .005, .01, .025, .05, .075, .1, .15, .25, .4, .5, .75, 1},
 		}, []string{"dsp_endpoint", "channel", "outcome"}),
+		fanoutDeadline: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "adtech",
+			Name:      "exchange_fanout_deadline_seconds",
+			Help:      "Effective per-auction DSP fan-out deadline by channel (per-channel override else bid_timeout, capped by tmax - tmax_margin).",
+			Buckets:   []float64{.025, .05, .075, .1, .15, .2, .25, .3, .4, .5, .6, .75, 1},
+		}, []string{"channel"}),
 		auctionsWonTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "adtech",
 			Name:      "auctions_won_total",
 			Help:      "Auctions won per DSP endpoint. Paired with bids_received_total to chart bid/win/loss by DSP.",
 		}, []string{"dsp_endpoint"}),
 	}
-	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal, m.auctionsWonTotal, m.phaseDuration, m.dspLegDuration)
+	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal, m.auctionsWonTotal, m.phaseDuration, m.dspLegDuration, m.fanoutDeadline)
 	return m
 }

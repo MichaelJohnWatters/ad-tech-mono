@@ -425,3 +425,105 @@ func TestBatch_ProfileSignal_ExpandsIDsToRows(t *testing.T) {
 		t.Errorf("per-id expansion wrong: %v", byVal)
 	}
 }
+
+// batchingDedup adds the events.BatchDedupStore capability to fakeDedup,
+// counting round trips and optionally failing after the first failAfter keys
+// of a call (a partial pipeline failure).
+type batchingDedup struct {
+	*fakeDedup
+	batchCalls int
+	failAfter  int // -1 = never fail
+}
+
+func (d *batchingDedup) MarkProcessedMany(ctx context.Context, keys []string, ttl time.Duration) ([]bool, error) {
+	d.batchCalls++
+	out := make([]bool, len(keys))
+	for i, k := range keys {
+		if d.failAfter >= 0 && i >= d.failAfter {
+			return out, errors.New("redis pipeline broke")
+		}
+		out[i], _ = d.fakeDedup.MarkProcessed(ctx, k, ttl)
+	}
+	return out, nil
+}
+
+// The pipelined path: a subject with id + business-key layers (impressions,
+// dsp_call) takes exactly TWO dedup round trips for the whole batch — never
+// one per message.
+func TestBatch_PipelinedDedup_RoundTripsPerBatch(t *testing.T) {
+	fd := &batchingDedup{fakeDedup: newFakeDedup(), failAfter: -1}
+	fi := &fakeBatchInserter{}
+	c := newBatchConsumer(fi, fd, nil)
+	st := &ackState{}
+	if err := c.handleImpressionBatch(context.Background(), []*events.Message{
+		impMsg("s1", "t1", st), impMsg("s2", "t2", st), impMsg("s3", "t3", st),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fd.batchCalls != 2 || fi.rows != 3 || st.acks != 3 {
+		t.Fatalf("impressions: batchCalls=%d rows=%d acks=%d, want 2/3/3", fd.batchCalls, fi.rows, st.acks)
+	}
+	fd.batchCalls = 0
+	st2 := &ackState{}
+	if err := c.handleDSPCallBatch(context.Background(), []*events.Message{dspCallMsg("d1", st2), dspCallMsg("d2", st2)}); err != nil {
+		t.Fatal(err)
+	}
+	if fd.batchCalls != 2 || st2.acks != 2 {
+		t.Fatalf("dsp_call: batchCalls=%d acks=%d, want 2/2", fd.batchCalls, st2.acks)
+	}
+}
+
+// A partial pipeline failure must release ONLY the markers this call set: a
+// pre-existing marker (a message genuinely processed earlier) must survive, or
+// its redelivery would be double-counted. Fail-closed: nothing inserted,
+// everything nak'd.
+func TestBatch_PipelinedDedup_PartialFailureReleasesOnlyOwnKeys(t *testing.T) {
+	fd := &batchingDedup{fakeDedup: newFakeDedup(), failAfter: 2}
+	fd.seen["dedup:"+events.SubjectImpression+":s1"] = true // processed earlier
+	fi := &fakeBatchInserter{}
+	c := newBatchConsumer(fi, fd, nil)
+	st := &ackState{}
+	if err := c.handleImpressionBatch(context.Background(), []*events.Message{
+		impMsg("s1", "t1", st), impMsg("s2", "t2", st), impMsg("s3", "t3", st),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if fi.calls != 0 || st.naks != 3 || st.acks != 0 {
+		t.Fatalf("calls=%d acks=%d naks=%d, want 0/0/3 (fail closed)", fi.calls, st.acks, st.naks)
+	}
+	if !fd.seen["dedup:"+events.SubjectImpression+":s1"] {
+		t.Error("pre-existing marker s1 was released — its redelivery would double-count")
+	}
+	if fd.seen["dedup:"+events.SubjectImpression+":s2"] {
+		t.Error("s2's marker (set by the failed call) must be released so the retry processes it")
+	}
+}
+
+// A dsp_call REPUBLISH (new stream sequence, byte-identical payload — the
+// spool / ambiguous-ack retry) must be dropped by the business key, while two
+// genuinely distinct calls for the same trace+DSP (video pod sub-auctions,
+// different timestamps) both land.
+func TestBatch_DSPCall_RepublishDedupedDistinctCallsKept(t *testing.T) {
+	fi := &fakeBatchInserter{}
+	c := newBatchConsumer(fi, newFakeDedup(), nil)
+	st := &ackState{}
+	ts := time.Date(2026, 10, 14, 22, 45, 0, 123456789, time.UTC)
+	mk := func(seq string, at time.Time) *events.Message {
+		data, _ := json.Marshal(events.DSPCallEvent{TraceID: "t", AuctionID: "t", Channel: "video",
+			DSPEndpoint: "http://dsp1", BidReceived: true, BidPriceUSD: 2, LatencyMs: 40, Timestamp: at})
+		return events.NewMessage(events.SubjectDSPCall, data, "", seq,
+			func() error { atomic.AddInt32(&st.acks, 1); return nil },
+			func() error { atomic.AddInt32(&st.naks, 1); return nil })
+	}
+	msgs := []*events.Message{
+		mk("seq-1", ts),
+		mk("seq-2", ts),                       // republish: same payload, new sequence
+		mk("seq-3", ts.Add(time.Millisecond)), // distinct pod sub-auction call
+	}
+	if err := c.handleDSPCallBatch(context.Background(), msgs); err != nil {
+		t.Fatal(err)
+	}
+	if fi.rows != 2 || st.acks != 3 {
+		t.Fatalf("rows=%d acks=%d, want 2 rows (republish dropped, distinct kept) / 3 acks", fi.rows, st.acks)
+	}
+}

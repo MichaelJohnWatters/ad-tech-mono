@@ -24,6 +24,7 @@ const (
 	PodDSPCompetitor1 = "dsp-competitor1-0"
 	PodDSPCompetitor2 = "dsp-competitor2-0"
 	PodExchange       = "exchange-0"
+	PodSSP            = "ssp-0"
 )
 
 // WithDeterministicCompetitors zeroes the noise and random-no-bid knobs on

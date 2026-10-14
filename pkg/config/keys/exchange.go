@@ -15,6 +15,8 @@ func ExchangeSchema() []config.SchemaEntry { return exchangeSet.Entries() }
 var Exchange = struct {
 	Channel                config.StringKey
 	BidTimeout             config.DurationKey
+	TMaxMargin             config.DurationKey
+	BidTimeoutByChannel    config.StringKey
 	DSPEndpoints           config.StringKey
 	NATSURL                config.StringKey
 	MaxRetries             config.IntKey
@@ -61,6 +63,8 @@ var Exchange = struct {
 }{
 	Channel:                  exchangeSet.String("exchange.channel", "all", config.TierLive, "Restricts which inventory channels this exchange instance auctions for (all, display, video, ctv, native, audio). Lets you stand up channel-dedicated instances without changing code.", config.Since("v1.0")),
 	BidTimeout:               exchangeSet.Duration("exchange.bid_timeout", "500ms", config.TierLive, "Maximum time the exchange will wait for DSP bids before closing the auction. OpenRTB industry default is 100ms; we run 500ms locally because each DSP is a single Go process and concurrent load slows it.", config.Since("v1.0")),
+	BidTimeoutByChannel:      exchangeSet.String("exchange.bid_timeout_by_channel", "", config.TierLive, "Per-channel override of exchange.bid_timeout, e.g. \"display=250ms,video=600ms,audio=600ms\". Channels not listed use exchange.bid_timeout; OpenRTB tmax still applies on top (min). Display can afford a tight deadline; video/CTV/audio decisioning happens before playback and tolerates more. Malformed entries are ignored (logged at ERROR once per change). Empty = one global timeout.", config.Since("v2.8")),
+	TMaxMargin:               exchangeSet.Duration("exchange.tmax_margin", "25ms", config.TierLive, "Headroom the exchange keeps for itself when a bid request carries OpenRTB tmax: the DSP fan-out deadline becomes min(exchange.bid_timeout, tmax - this) (floored at 10ms), and the outbound requests carry that deadline as the DSPs' tmax. Covers dealeval/finalize/encode + the return hop to the caller. No tmax on the request = exchange.bid_timeout alone.", config.Since("v2.8")),
 	DSPEndpoints:             exchangeSet.String("exchange.dsp_endpoints", "http://localhost:8082,http://localhost:8089,http://localhost:8090", config.TierLive, "Comma-separated DSP base URLs the exchange fans bid requests out to. Smart routing further filters this list per auction. Live-tunable so e2e tests and ops can swap in test stubs or remove broken endpoints without restarting the exchange.", config.Since("v1.0")),
 	NATSURL:                  exchangeSet.String("exchange.nats_url", "nats://localhost:4222", config.TierStatic, "NATS JetStream URL for publishing AuctionWinEvent and AuctionCompleteEvent.", config.Since("v1.0")),
 	MaxRetries:               exchangeSet.Int("exchange.max_retries", "30", config.TierStatic, "How many times the exchange retries binding its HTTP port on startup before exiting. Helps in Tilt where ports may still be in TIME_WAIT after a restart.", config.Since("v1.0")),

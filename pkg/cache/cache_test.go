@@ -206,3 +206,20 @@ func TestDedupAdapter(t *testing.T) {
 		t.Error("after unmark, should be new again")
 	}
 }
+
+// SMembersMulti on a backend without the pipeline capability (MemoryL2, the
+// SelfHealingL2 stand-in) falls back to serial SMembers, index-aligned, with
+// absent keys reading as empty.
+func TestSMembersMulti_SerialFallback(t *testing.T) {
+	ctx := context.Background()
+	m := cache.NewMemoryL2()
+	_ = m.SAdd(ctx, "a", "x")
+	_ = m.SAdd(ctx, "c", "y", "z")
+	got, err := cache.SMembersMulti(ctx, m, []string{"a", "missing", "c"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 3 || len(got[0]) != 1 || len(got[1]) != 0 || len(got[2]) != 2 {
+		t.Fatalf("misaligned result: %v", got)
+	}
+}

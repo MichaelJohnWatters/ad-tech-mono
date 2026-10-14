@@ -63,6 +63,8 @@ func main() {
 	lc.OnShutdown("otel", func(ctx context.Context) error { return otelShutdown(ctx) })
 
 	knobs := NewKnobs(sc)
+	tmaxMarginFn = config.NewLiveDuration(sc.Manager, sc.Cfg, keys.Exchange.TMaxMargin.Key(), keys.Exchange.TMaxMargin.Default()).Value
+	channelTimeoutsRawFn = func() string { return keys.Exchange.BidTimeoutByChannel.Get(cfg) }
 	port := keys.Exchange.Port.Get(cfg)
 	// dspEndpointsFn reads the in-memory config map per auction (cheap;
 	// it's a sync.RWMutex-guarded map lookup, not a Postgres query). The
@@ -123,10 +125,24 @@ func main() {
 	// httpClient.Timeout is the belt-and-braces fallback if the per-request
 	// context deadline doesn't fire. Live-updated on bid_timeout edits so
 	// the value never drifts from the auction-handler context deadline.
-	httpClient := &http.Client{Timeout: knobs.BidTimeout.Value()}
+	// The backstop must cover the LONGEST deadline any channel can get, or a
+	// per-channel override above bid_timeout (e.g. video=800ms) would be cut
+	// at the global value by the client before its context deadline fires.
+	backstop := func() time.Duration {
+		d := knobs.BidTimeout.Value()
+		if ct := loadChannelTimeouts(keys.Exchange.BidTimeoutByChannel.Get(cfg), log); ct.max > d {
+			d = ct.max
+		}
+		return d
+	}
+	httpClient := &http.Client{Timeout: backstop()}
 	sc.Manager.OnChange(keys.Exchange.BidTimeout.Key(), func(_, _, newVal string) {
-		httpClient.Timeout = knobs.BidTimeout.Value()
+		httpClient.Timeout = backstop()
 		log.Info("bid timeout updated live", "new", newVal)
+	})
+	sc.Manager.OnChange(keys.Exchange.BidTimeoutByChannel.Key(), func(_, _, newVal string) {
+		httpClient.Timeout = backstop()
+		log.Info("per-channel bid timeouts updated live", "new", newVal, "client_backstop", httpClient.Timeout)
 	})
 	adsTxtCache := fraud.NewAdsTxtCache()
 
@@ -512,7 +528,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 				json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true, NBR: openrtb.NBRAdsTxtUnauthorised, NBRReason: reason})
 				reqLog.Info("auction rejected", "reason", reason, "domain", bidReq.Site.Domain)
-				am.auctionsTotal.WithLabelValues("rejected_adstxt", channel).Inc()
+				am.auctionsTotal.WithLabelValues("rejected_adstxt", routingChannel).Inc()
 				return
 			}
 		}
@@ -525,7 +541,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 			json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true, NBR: openrtb.NBRSChainInvalid, NBRReason: reason})
 			reqLog.Info("auction rejected", "reason", reason)
-			am.auctionsTotal.WithLabelValues("rejected_schain", channel).Inc()
+			am.auctionsTotal.WithLabelValues("rejected_schain", routingChannel).Inc()
 			return
 		}
 
@@ -569,12 +585,24 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		//   2. The gather loop in fanOutToDSPs uses ctx.Done() to early-finish
 		//      once the deadline elapses — auctions complete on the configured
 		//      bid_timeout, not on "slowest DSP's actual response time."
-		bidTimeout := bidTimeoutFn()
+		// Honour OpenRTB tmax: the fan-out budget is the tighter of our
+		// bid_timeout and the caller's tmax minus our own margin, and DSPs are
+		// told THEIR budget via the outbound tmax (not the caller's whole one).
+		// tmax isn't in the ads.cert canonical form, so rewriting it after
+		// signReq doesn't invalidate the signature.
+		tmaxIn := bidReq.TMax
+		chanTimeout := channelBidTimeout(loadChannelTimeouts(channelTimeoutsRawFn(), log), routingChannel, bidTimeoutFn())
+		bidTimeout := auctionDeadline(chanTimeout, tmaxIn, tmaxMarginFn())
+		bidReq.TMax = int(bidTimeout.Milliseconds())
+		if am != nil {
+			am.fanoutDeadline.WithLabelValues(routingChannel).Observe(bidTimeout.Seconds())
+		}
 		fanCtx, fanCancel := context.WithTimeout(ctx, bidTimeout)
 		defer fanCancel()
 		fanCtx, fanSpan := tracing.StartSpan(fanCtx, "exchange.fanout",
 			attribute.Int("dsps.called", len(selectedEndpoints)),
 			attribute.Int64("bid_timeout_ms", bidTimeout.Milliseconds()),
+			attribute.Int("tmax_in_ms", tmaxIn),
 		)
 		// Dev-mode: publisher simulator can send a CSV of DSP indexes that
 		// should be deliberately slow this auction, so the UI can demo the
@@ -600,7 +628,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			}
 			json.NewEncoder(w).Encode(noBidResp)
 			reqLog.Info("auction complete", "result", "no_bids", "duration_ms", clk.Since(start).Milliseconds())
-			am.auctionsTotal.WithLabelValues("no_bids", channel).Inc()
+			am.auctionsTotal.WithLabelValues("no_bids", routingChannel).Inc()
 			// Record the no-bid auction too, so the auctions table reflects
 			// EVERY ad request (won + unfilled). Without this, fill rate
 			// (impressions / auctions) reads ~100% because only won auctions
@@ -696,7 +724,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 				json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
 				reqLog.Info("auction complete", "result", "all_bids_below_floor", "num_bids", len(bids), "duration_ms", clk.Since(start).Milliseconds())
-				am.auctionsTotal.WithLabelValues("all_below_floor", channel).Inc()
+				am.auctionsTotal.WithLabelValues("all_below_floor", routingChannel).Inc()
 				return
 			}
 			auctionReq := auction.AuctionRequest{
@@ -736,7 +764,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 				w.Header().Set(constants.HeaderContentType, constants.ContentTypeJSON)
 				json.NewEncoder(w).Encode(openrtb.BidResponse{ID: bidReq.ID, NoBid: true})
 				reqLog.Info("auction complete", "result", "no_winner", "error", err.Error(), "duration_ms", clk.Since(start).Milliseconds())
-				am.auctionsTotal.WithLabelValues("no_winner", channel).Inc()
+				am.auctionsTotal.WithLabelValues("no_winner", routingChannel).Inc()
 				return
 			}
 			winner := result.Winners[0]
@@ -861,7 +889,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			"duration_ms", clk.Since(start).Milliseconds(),
 		)
 		// Domain counters for the Pipeline Health dashboard.
-		am.auctionsTotal.WithLabelValues("winner", channel).Inc()
+		am.auctionsTotal.WithLabelValues("winner", routingChannel).Inc()
 		am.clearingPriceUSDTotal.Add(clearingPrice)
 
 		// Tag the auction span with the outcome so dev tools (pub sim, trace

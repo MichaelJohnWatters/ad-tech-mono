@@ -11,7 +11,7 @@ The central auction marketplace. Receives bid requests from SSPs, fans out to DS
 - Fan out bid requests to eligible DSPs: our DSP over its gRPC twin
   (`grpc://` endpoint in `exchange.dsp_endpoints`), third-party/competitor
   DSPs over industry-standard OpenRTB JSON/HTTP
-- Enforce bid timeout (configurable via live config: `exchange.bid_timeout_ms`)
+- Enforce the fan-out deadline: `min(channel_timeout, tmax − exchange.tmax_margin)` where channel_timeout = `exchange.bid_timeout_by_channel` override (e.g. `display=250ms,video=600ms`; empty default) else `exchange.bid_timeout`; the HTTP client backstop tracks the largest override (both live; floor 10ms). A request with no `tmax` uses `bid_timeout` alone. Outbound DSP requests carry that deadline as THEIR `tmax`. The SSP's `tmax` comes from `ssp.tmax` (default 525ms = 500ms bid_timeout + 25ms margin, i.e. unchanged); publisher-adserver sends 500 (its Prebid budget) → 475ms. Per-DSP leg latency: `adtech_exchange_dsp_leg_duration_seconds{dsp_endpoint,channel,outcome}`.
 - Run auction (second-price by default)
 - Publish `AuctionWinEvent` to NATS (single source of truth for cost)
 - Publish `AuctionCompleteEvent` to NATS (all bids, winner, timing)

@@ -26,6 +26,12 @@ func (a *L2DedupAdapter) MarkProcessed(ctx context.Context, key string, ttl time
 	return a.l2.SetNX(ctx, key, "1", ttl)
 }
 
+// MarkProcessedMany is the batch form (events.BatchDedupStore): one pipelined
+// SETNX round trip for the whole batch when the backend supports it.
+func (a *L2DedupAdapter) MarkProcessedMany(ctx context.Context, keys []string, ttl time.Duration) ([]bool, error) {
+	return SetNXMulti(ctx, a.l2, keys, ttl)
+}
+
 // UnmarkProcessed removes the dedup key (allows retry).
 func (a *L2DedupAdapter) UnmarkProcessed(ctx context.Context, key string) error {
 	return a.l2.Delete(ctx, key)

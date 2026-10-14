@@ -31,3 +31,57 @@ type Lookup interface {
 	// other DSPs in the same auction never get to see.
 	DSPSegmentsForUser(ctx context.Context, userID string) ([]string, error)
 }
+
+// DSPBatchLookup is an optional Lookup capability: dsp_private segments for
+// many user ids in ONE round trip. The DSP folds a user's identity-graph-
+// linked ids into its private-segment lookup (up to identity_max_linked);
+// serially that was one Redis round trip per id inside the bid deadline.
+// Decorators (L1 cache, probe) must forward it or the chain silently
+// degrades to serial lookups.
+type DSPBatchLookup interface {
+	// DSPSegmentsForUsers returns one segment slice per id, index-aligned.
+	DSPSegmentsForUsers(ctx context.Context, userIDs []string) ([][]string, error)
+}
+
+// DSPSegmentsForUsers uses l's batch capability when present, else falls back
+// to serial DSPSegmentsForUser calls. Serial-path errors degrade per id (that
+// id reads as "no segments"), matching the bid path's best-effort contract.
+func DSPSegmentsForUsers(ctx context.Context, l Lookup, userIDs []string) ([][]string, error) {
+	if b, ok := l.(DSPBatchLookup); ok {
+		return b.DSPSegmentsForUsers(ctx, userIDs)
+	}
+	out := make([][]string, len(userIDs))
+	for i, id := range userIDs {
+		segs, err := l.DSPSegmentsForUser(ctx, id)
+		if err != nil {
+			continue
+		}
+		out[i] = segs
+	}
+	return out, nil
+}
+
+// PublicBatchLookup is the public-visibility twin of DSPBatchLookup: the SSP
+// looks up user + household + hashed-email public segments per request —
+// three Redis round trips (three goroutines) collapsed into one pipelined call.
+type PublicBatchLookup interface {
+	// SegmentsForUsers returns one public segment slice per id, index-aligned.
+	SegmentsForUsers(ctx context.Context, userIDs []string) ([][]string, error)
+}
+
+// SegmentsForUsers uses l's public batch capability when present, else serial
+// SegmentsForUser calls degrading per id (a failed id reads as no segments).
+func SegmentsForUsers(ctx context.Context, l Lookup, userIDs []string) ([][]string, error) {
+	if b, ok := l.(PublicBatchLookup); ok {
+		return b.SegmentsForUsers(ctx, userIDs)
+	}
+	out := make([][]string, len(userIDs))
+	for i, id := range userIDs {
+		segs, err := l.SegmentsForUser(ctx, id)
+		if err != nil {
+			continue
+		}
+		out[i] = segs
+	}
+	return out, nil
+}

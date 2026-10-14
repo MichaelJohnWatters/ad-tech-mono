@@ -4026,7 +4026,11 @@ components:
                   description: Unix-seconds signing time, part of the signed payload (replay protection).
         tmax:
           type: integer
-          description: Max response time (ms)
+          description: >-
+            Max response time (ms) — the caller's whole budget. Honoured by the
+            exchange: its DSP fan-out deadline is min(exchange.bid_timeout,
+            tmax − exchange.tmax_margin), floored at 10ms; omitted/0 = bid_timeout.
+            Requests the exchange sends to DSPs carry that deadline as tmax.
 
     BidResponse:
       type: object

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log/slog"
+	"strconv"
 	"time"
 
 	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/billing"
@@ -40,6 +41,16 @@ type batchKeep[T any] struct {
 	bizKey   string // "" when the subject has no one-per-trace business key
 }
 
+// releaseNew unmarks exactly the keys a failed MarkProcessedMany reported as
+// newly set by this call (isNew may be shorter than keys, or nil).
+func releaseNew(ctx context.Context, d events.DedupStore, keys []string, isNew []bool) {
+	for i, k := range keys {
+		if i < len(isNew) && isNew[i] {
+			_ = d.UnmarkProcessed(ctx, k)
+		}
+	}
+}
+
 // batchProcess is the shared pipeline for every core subject. decode turns a
 // payload into a typed event (returns false to drop poison data); insert bulk-
 // writes the survivors; after runs a per-event side-effect (billing) that must
@@ -59,26 +70,43 @@ func batchProcess[T any](
 	insert func(ctx context.Context, es []*T) error,
 	afterBatch func(ctx context.Context, es []*T),
 ) error {
-	keep := make([]batchKeep[T], 0, len(msgs))
+	// Dedup in TWO pipelined round trips per batch (message-id layer, then the
+	// business-key layer for the survivors) instead of 1-2 sequential SETNX
+	// per message — that per-message loop capped the consumer below the event
+	// rate. Outcomes are identical to the serial loop: a pipeline executes in
+	// order, so a key repeated within one batch is "new" only at its first
+	// position. Marking before processing + unmarking on insert failure
+	// mirrors IdempotentHandler.
+	idKeys := make([]string, 0, len(msgs))
 	for _, m := range msgs {
-		// Dedup on the message's stable id (stream sequence). Marking before
-		// processing + unmarking on insert failure mirrors IdempotentHandler.
-		var key string
-		isNew := true
 		if m.MessageID != "" {
-			key = "dedup:" + m.Subject + ":" + m.MessageID
-			var err error
-			isNew, err = c.dedup.MarkProcessed(ctx, key, c.dedupTTL)
-			if err != nil {
-				// Can't guarantee dedup — nak, retry later rather than risk a
-				// double-count. (Redis blip; fail-closed here on purpose.)
-				m.Nak()
+			idKeys = append(idKeys, "dedup:"+m.Subject+":"+m.MessageID)
+		}
+	}
+	idNew, err := events.MarkProcessedMany(ctx, c.dedup, idKeys, c.dedupTTL)
+	if err != nil {
+		// Can't guarantee dedup — nak the batch, retry later rather than risk
+		// a double-count. (Redis blip; fail-closed here on purpose.) Release
+		// ONLY the keys this call newly set, so the retry isn't mistaken for
+		// a duplicate — pre-existing markers (genuinely processed) stay.
+		releaseNew(ctx, c.dedup, idKeys, idNew)
+		for _, m := range msgs {
+			m.Nak()
+		}
+		return nil
+	}
+	pending := make([]batchKeep[T], 0, len(msgs))
+	j := 0
+	for _, m := range msgs {
+		var key string
+		if m.MessageID != "" {
+			key = idKeys[j]
+			isNew := idNew[j]
+			j++
+			if !isNew {
+				m.Ack() // duplicate redelivery — already processed, drop it
 				continue
 			}
-		}
-		if !isNew {
-			m.Ack() // duplicate redelivery — already processed, drop it
-			continue
 		}
 		e, ok := decode(m.Data)
 		if !ok {
@@ -89,21 +117,46 @@ func batchProcess[T any](
 		if bizKey != nil {
 			if k := bizKey(e); k != "" {
 				bkey = "dedup:biz:" + m.Subject + ":" + k
-				isNew, err := c.dedup.MarkProcessed(ctx, bkey, c.dedupTTL)
-				if err != nil {
-					if key != "" {
-						_ = c.dedup.UnmarkProcessed(ctx, key)
-					}
-					m.Nak() // Redis blip — fail closed, same as above
-					continue
-				}
-				if !isNew {
-					m.Ack() // publisher republish (new sequence, same event) — drop
-					continue
-				}
 			}
 		}
-		keep = append(keep, batchKeep[T]{msg: m, event: e, dedupKey: key, bizKey: bkey})
+		pending = append(pending, batchKeep[T]{msg: m, event: e, dedupKey: key, bizKey: bkey})
+	}
+
+	bizKeys := make([]string, 0, len(pending))
+	for _, p := range pending {
+		if p.bizKey != "" {
+			bizKeys = append(bizKeys, p.bizKey)
+		}
+	}
+	var bizNew []bool
+	if len(bizKeys) > 0 {
+		bizNew, err = events.MarkProcessedMany(ctx, c.dedup, bizKeys, c.dedupTTL)
+		if err != nil {
+			// Redis blip — fail closed, same as above: release the biz marks
+			// this call set plus the survivors' id marks (all newly set by
+			// this batch — duplicates were already dropped), nak survivors.
+			releaseNew(ctx, c.dedup, bizKeys, bizNew)
+			for _, p := range pending {
+				if p.dedupKey != "" {
+					_ = c.dedup.UnmarkProcessed(ctx, p.dedupKey)
+				}
+				p.msg.Nak()
+			}
+			return nil
+		}
+	}
+	keep := make([]batchKeep[T], 0, len(pending))
+	b := 0
+	for _, p := range pending {
+		if p.bizKey != "" {
+			isNew := bizNew[b]
+			b++
+			if !isNew {
+				p.msg.Ack() // publisher republish (new sequence, same event) — drop
+				continue
+			}
+		}
+		keep = append(keep, p)
 	}
 	if len(keep) == 0 {
 		return nil
@@ -495,7 +548,17 @@ func (c *EventConsumer) handleDSPCallBatch(ctx context.Context, msgs []*events.M
 				SchemaVersion: 1, Timestamp: src.Timestamp,
 			}, true
 		},
-		nil, // one call per DSP per trace: multiple legitimate rows
+		// Business key = one exact call: trace + endpoint + its nanosecond
+		// timestamp (stamped once by the exchange). A trace can carry several
+		// legitimate calls per DSP (video pod sub-auctions), so trace+endpoint
+		// alone would wrongly drop them — but a publisher REPUBLISH (spool /
+		// ambiguous-ack retry: a new stream sequence, identical payload) has
+		// the identical timestamp and collides here. Without this layer the
+		// 2026-10-14 150rps pin landed 227k byte-identical dsp_calls rows
+		// (~21%), inflating the router's reseed aggregate.
+		func(e *analytics.DSPCallEvent) string {
+			return e.TraceID + "|" + e.DSPEndpoint + "|" + strconv.FormatInt(e.Timestamp.UnixNano(), 10)
+		},
 		c.batch.InsertDSPCalls,
 		nil,
 	)

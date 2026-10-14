@@ -154,6 +154,55 @@ func (c *Client) SMembers(ctx context.Context, key string) ([]string, error) {
 	return c.rdb.SMembers(ctx, key).Result()
 }
 
+// SetNXMulti runs SETNX key "1" ttl for every key in one pipelined round trip
+// (SetNXBulk). Pipelines execute in order, so a repeated key is new only at
+// its first position.
+func (c *Client) SetNXMulti(ctx context.Context, keys []string, ttl time.Duration) ([]bool, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	pipe := c.rdb.Pipeline()
+	cmds := make([]*redis.BoolCmd, len(keys))
+	for i, k := range keys {
+		cmds[i] = pipe.SetNX(ctx, k, "1", ttl)
+	}
+	_, execErr := pipe.Exec(ctx)
+	// Even on a (partial) failure, report which keys THIS call set, so the
+	// caller can release exactly those and never a pre-existing marker.
+	out := make([]bool, len(keys))
+	for i, cmd := range cmds {
+		if ok, err := cmd.Result(); err == nil {
+			out[i] = ok
+		}
+	}
+	return out, execErr
+}
+
+// SMembersMulti reads many sets in one pipelined round trip (SetBulkReader).
+// A missing key reads as an empty set, as with SMembers.
+func (c *Client) SMembersMulti(ctx context.Context, keys ...string) ([][]string, error) {
+	if len(keys) == 0 {
+		return nil, nil
+	}
+	pipe := c.rdb.Pipeline()
+	cmds := make([]*redis.StringSliceCmd, len(keys))
+	for i, k := range keys {
+		cmds[i] = pipe.SMembers(ctx, k)
+	}
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return nil, err
+	}
+	out := make([][]string, len(keys))
+	for i, cmd := range cmds {
+		m, err := cmd.Result()
+		if err != nil && err != redis.Nil {
+			return nil, err
+		}
+		out[i] = m
+	}
+	return out, nil
+}
+
 // ReplaceSet atomically swaps the set at key via a MULTI/EXEC (DEL + SADD +
 // EXPIRE) so a concurrent SMEMBERS never sees an empty or half-built set.
 func (c *Client) ReplaceSet(ctx context.Context, key string, members []string, ttl time.Duration) error {

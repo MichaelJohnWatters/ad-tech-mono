@@ -131,6 +131,17 @@ func (s *SelfHealingL2) MGet(ctx context.Context, keys ...string) ([]*string, er
 	return MGet(ctx, s.get(), keys)
 }
 
+// SMembersMulti forwards the SetBulkReader capability to whichever backend is
+// current (falling back to serial SMembers while on the in-memory stand-in).
+func (s *SelfHealingL2) SMembersMulti(ctx context.Context, keys ...string) ([][]string, error) {
+	return SMembersMulti(ctx, s.get(), keys)
+}
+
+// SetNXMulti forwards the SetNXBulk capability to the current backend.
+func (s *SelfHealingL2) SetNXMulti(ctx context.Context, keys []string, ttl time.Duration) ([]bool, error) {
+	return SetNXMulti(ctx, s.get(), keys, ttl)
+}
+
 // Eval forwards the Scripter capability when the current backend has it;
 // errUnsupported otherwise (the in-memory fallback era) — callers use their
 // plain multi-op path on error.

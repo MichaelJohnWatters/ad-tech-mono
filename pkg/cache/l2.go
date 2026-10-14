@@ -98,6 +98,56 @@ func MGet(ctx context.Context, l2 L2Cache, keys []string) ([]*string, error) {
 	return out, nil
 }
 
+// SetBulkReader is an optional L2 capability (like BulkGetter): SMEMBERS for
+// many keys in ONE round trip (a pipeline). The DSP's private-segment lookup
+// reads a user plus up to identity_max_linked linked ids — serially that was
+// up to 11 sequential Redis round trips inside one bid.
+type SetBulkReader interface {
+	// SMembersMulti returns one member slice per key (nil where absent).
+	SMembersMulti(ctx context.Context, keys ...string) ([][]string, error)
+}
+
+// SMembersMulti bulk-reads sets via the backend's pipeline when it supports
+// SetBulkReader, else falls back to serial SMembers.
+func SMembersMulti(ctx context.Context, l2 L2Cache, keys []string) ([][]string, error) {
+	if br, ok := l2.(SetBulkReader); ok {
+		return br.SMembersMulti(ctx, keys...)
+	}
+	out := make([][]string, len(keys))
+	for i, k := range keys {
+		m, err := l2.SMembers(ctx, k)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = m
+	}
+	return out, nil
+}
+
+// SetNXBulk is an optional L2 capability: SETNX (value "1", one ttl) for many
+// keys in one pipelined round trip, executed in order. Used by batch dedup.
+type SetNXBulk interface {
+	SetNXMulti(ctx context.Context, keys []string, ttl time.Duration) ([]bool, error)
+}
+
+// SetNXMulti uses the backend's pipeline when it supports SetNXBulk, else
+// serial SetNX (first error aborts). On error the returned slice still marks
+// the keys this call newly set (true) so callers can release exactly those.
+func SetNXMulti(ctx context.Context, l2 L2Cache, keys []string, ttl time.Duration) ([]bool, error) {
+	if b, ok := l2.(SetNXBulk); ok {
+		return b.SetNXMulti(ctx, keys, ttl)
+	}
+	out := make([]bool, len(keys))
+	for i, k := range keys {
+		ok, err := l2.SetNX(ctx, k, "1", ttl)
+		if err != nil {
+			return out, err
+		}
+		out[i] = ok
+	}
+	return out, nil
+}
+
 // Scripter is an optional L2 capability (like BulkGetter): server-side Lua
 // evaluation, for hot paths that would otherwise pay several serial round
 // trips for one logical decision (e.g. the adserver's user+household

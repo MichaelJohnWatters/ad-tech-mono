@@ -102,6 +102,77 @@ func (c *Cache) DSPSegmentsForUser(ctx context.Context, userID string) ([]string
 	return c.get(ctx, &c.priv, userID, false, c.inner.DSPSegmentsForUser)
 }
 
+// DSPSegmentsForUsers / SegmentsForUsers are the batch forms (audstore batch
+// capabilities): hits are served from L1 and ALL misses go to the inner store
+// in one batch call (one Redis round trip) instead of one call per id. Same
+// discipline as get: absolute TTL, copies out, never cache an error.
+func (c *Cache) DSPSegmentsForUsers(ctx context.Context, userIDs []string) ([][]string, error) {
+	return c.batchGet(ctx, &c.priv, userIDs, false, func(ctx context.Context, ids []string) ([][]string, error) {
+		return audstore.DSPSegmentsForUsers(ctx, c.inner, ids)
+	})
+}
+
+func (c *Cache) SegmentsForUsers(ctx context.Context, userIDs []string) ([][]string, error) {
+	return c.batchGet(ctx, &c.pub, userIDs, true, func(ctx context.Context, ids []string) ([][]string, error) {
+		return audstore.SegmentsForUsers(ctx, c.inner, ids)
+	})
+}
+
+type batchFn func(context.Context, []string) ([][]string, error)
+
+func (c *Cache) batchGet(ctx context.Context, shards *[numShards]shard, userIDs []string, public bool, inner batchFn) ([][]string, error) {
+	if !c.enabled() {
+		return inner(ctx, userIDs)
+	}
+	out := make([][]string, len(userIDs))
+	now := time.Now().UnixMilli()
+	var missIdx []int
+	var missIDs []string
+	for i, id := range userIDs {
+		if id == "" {
+			continue
+		}
+		sh := &shards[shardIndex(id)]
+		sh.mu.Lock()
+		e, ok := sh.m[id]
+		if ok && now < e.exp {
+			out[i] = cloneSegs(e.segs)
+			sh.mu.Unlock()
+			c.incHit(public)
+			continue
+		}
+		sh.mu.Unlock()
+		missIdx = append(missIdx, i)
+		missIDs = append(missIDs, id)
+	}
+	if len(missIDs) == 0 {
+		return out, nil
+	}
+	for range missIDs {
+		c.incMiss(public)
+	}
+	sets, err := inner(ctx, missIDs)
+	if err != nil {
+		return out, err // never cache an error/degraded result
+	}
+	ttlMs := c.ttlMillis()
+	for j, i := range missIdx {
+		if j >= len(sets) {
+			break
+		}
+		out[i] = sets[j]
+		id := missIDs[j]
+		sh := &shards[shardIndex(id)]
+		stored := cloneSegs(sets[j])
+		sh.mu.Lock()
+		if _, exists := sh.m[id]; exists || len(sh.m) < maxPerShard {
+			sh.m[id] = entry{segs: stored, exp: now + ttlMs}
+		}
+		sh.mu.Unlock()
+	}
+	return out, nil
+}
+
 type lookupFn func(context.Context, string) ([]string, error)
 
 func (c *Cache) get(ctx context.Context, shards *[numShards]shard, userID string, public bool, inner lookupFn) ([]string, error) {

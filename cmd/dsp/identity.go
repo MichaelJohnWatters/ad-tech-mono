@@ -245,14 +245,24 @@ func dspPrivateSegments(ctx context.Context, store audstore.Lookup, resolver ide
 			}
 		}
 	}
+	// One batch call (one Redis round trip through the L1/probe chain) for
+	// the user + every linked id, instead of one sequential call per id.
+	// Unlinked users (the common case) keep the single-key path.
+	var sets [][]string
+	var err error
+	if len(ids) == 1 {
+		var segs []string
+		segs, err = store.DSPSegmentsForUser(ctx, ids[0])
+		sets = [][]string{segs}
+	} else {
+		sets, err = audstore.DSPSegmentsForUsers(ctx, store, ids)
+	}
+	if err != nil {
+		log.Debug("dsp private segment lookup degraded", "ids", len(ids), "error", err)
+	}
 	seen := make(map[string]bool)
 	var out []string
-	for _, id := range ids {
-		segs, err := store.DSPSegmentsForUser(ctx, id)
-		if err != nil {
-			log.Debug("dsp private segment lookup degraded", "id", id, "error", err)
-			continue
-		}
+	for _, segs := range sets {
 		for _, s := range segs {
 			if !seen[s] {
 				seen[s] = true

@@ -170,3 +170,93 @@ func BenchmarkCacheHit(b *testing.B) {
 		}
 	})
 }
+
+// batchingLookup is a countingLookup that also implements the batch
+// capability, recording each batch's ids so tests can prove misses go out in
+// ONE inner call and hits never reach it.
+type batchingLookup struct {
+	*countingLookup
+	batches [][]string
+	segsFor map[string][]string
+}
+
+func (b *batchingLookup) DSPSegmentsForUsers(_ context.Context, ids []string) ([][]string, error) {
+	b.mu.Lock()
+	b.batches = append(b.batches, append([]string(nil), ids...))
+	b.mu.Unlock()
+	out := make([][]string, len(ids))
+	for i, id := range ids {
+		out[i] = b.segsFor[id]
+	}
+	return out, nil
+}
+
+func TestCache_BatchServesHitsAndBatchesMisses(t *testing.T) {
+	en := true
+	inner := &batchingLookup{countingLookup: newCounting(), segsFor: map[string][]string{
+		"u1": {"s1"}, "u2": {"s2"}, "u3": {"s3"},
+	}}
+	c := Wrap(inner, func() bool { return en }, func() time.Duration { return time.Minute }, nil)
+	defer c.Stop()
+	ctx := context.Background()
+
+	got, _ := c.DSPSegmentsForUsers(ctx, []string{"u1", "u2"})
+	if len(inner.batches) != 1 || len(inner.batches[0]) != 2 {
+		t.Fatalf("cold: want ONE inner batch of 2 ids, got %v", inner.batches)
+	}
+	if got[0][0] != "s1" || got[1][0] != "s2" {
+		t.Fatalf("cold results misaligned: %v", got)
+	}
+
+	got, _ = c.DSPSegmentsForUsers(ctx, []string{"u1", "u3", "u2"})
+	if len(inner.batches) != 2 || len(inner.batches[1]) != 1 || inner.batches[1][0] != "u3" {
+		t.Fatalf("warm: only the miss (u3) should reach the inner batch, got %v", inner.batches)
+	}
+	if got[0][0] != "s1" || got[1][0] != "s3" || got[2][0] != "s2" {
+		t.Fatalf("warm results misaligned: %v", got)
+	}
+	if inner.n("priv:u1")+inner.n("priv:u2")+inner.n("priv:u3") != 0 {
+		t.Fatalf("batch path must not fall back to per-id calls")
+	}
+
+	// Disabled = passthrough: the whole batch goes to the inner store.
+	en = false
+	_, _ = c.DSPSegmentsForUsers(ctx, []string{"u1", "u2"})
+	if len(inner.batches) != 3 || len(inner.batches[2]) != 2 {
+		t.Fatalf("disabled: want full passthrough batch, got %v", inner.batches)
+	}
+}
+
+func (b *batchingLookup) SegmentsForUsers(_ context.Context, ids []string) ([][]string, error) {
+	b.mu.Lock()
+	b.batches = append(b.batches, append([]string{"pub"}, ids...))
+	b.mu.Unlock()
+	out := make([][]string, len(ids))
+	for i, id := range ids {
+		out[i] = b.segsFor[id]
+	}
+	return out, nil
+}
+
+// The public batch (SSP: user + household + hashed email) uses its own shard
+// set: a dsp_private hit for the same id must not satisfy a public lookup.
+func TestCache_PublicBatchSeparateFromPrivate(t *testing.T) {
+	en := true
+	inner := &batchingLookup{countingLookup: newCounting(), segsFor: map[string][]string{"u": {"s"}, "hh:1": {"h"}}}
+	c := Wrap(inner, func() bool { return en }, func() time.Duration { return time.Minute }, nil)
+	defer c.Stop()
+	ctx := context.Background()
+
+	_, _ = c.DSPSegmentsForUsers(ctx, []string{"u"})         // warms PRIVATE only
+	got, _ := c.SegmentsForUsers(ctx, []string{"u", "hh:1"}) // both public misses → one batch
+	if n := len(inner.batches); n != 2 || inner.batches[1][0] != "pub" || len(inner.batches[1]) != 3 {
+		t.Fatalf("want one public batch of 2 ids after the private warm-up, got %v", inner.batches)
+	}
+	if got[0][0] != "s" || got[1][0] != "h" {
+		t.Fatalf("misaligned: %v", got)
+	}
+	_, _ = c.SegmentsForUsers(ctx, []string{"hh:1", "u"})
+	if len(inner.batches) != 2 {
+		t.Fatalf("warm public batch must be served from L1, got %v", inner.batches)
+	}
+}
