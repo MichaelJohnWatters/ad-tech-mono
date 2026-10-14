@@ -13,6 +13,8 @@
 #   scripts/perfprofile.sh <out_dir>                  # profile now
 #   DELAY=300 scripts/perfprofile.sh <out_dir>        # wait 5m first (mid-run)
 #   SERVICES="dsp-internal ssp" scripts/perfprofile.sh <out_dir>
+#   SUMMARIZE=0 …                       # capture only (use during a load run)
+#   SUMMARIZE_ONLY=1 scripts/perfprofile.sh <out_dir>  # summarize a capture
 #
 # Overhead: CPU profiling ~1-3%; block/mutex armed only for the capture
 # window (rates below) and disarmed after — keep captures inside the steady
@@ -25,6 +27,8 @@ DELAY=${DELAY:-0}
 CPU_SECONDS=${CPU_SECONDS:-30}
 BLOCK_RATE=${BLOCK_RATE:-10000}   # ns: sample one blocking event per 10µs blocked
 MUTEX_FRACTION=${MUTEX_FRACTION:-5}
+# Frames that mark "inside a request" (HTTP + gRPC servers) for block/mutex focus.
+REQ_FOCUS=${REQ_FOCUS:-'ServeHTTP|handleStream|processUnaryRPC'}
 SERVICES=${SERVICES:-"ssp exchange dsp-internal adserver tracker publisher-adserver gateway"}
 
 port_for() {
@@ -57,6 +61,7 @@ profile_pod() { # svc pod port
   pull "$pod" "$port" "/debug/pprof/goroutine?debug=1" "$dir/goroutine.txt"
 }
 
+if [ "${SUMMARIZE_ONLY:-0}" != "1" ]; then
 [ "$DELAY" -gt 0 ] && sleep "$DELAY"
 mkdir -p "$OUT"
 echo "perfprofile: capturing ${CPU_SECONDS}s CPU + block/mutex window → $OUT"
@@ -68,8 +73,13 @@ for svc in $SERVICES; do
   done
 done
 wait
+fi
 
-# Human-readable summary: per service, merged across its pods.
+summarize() {
+# Human-readable summary: per service, merged across its pods. Runs `go tool
+# pprof` dozens of times — host CPU the simulator + VM share — so perfbench
+# calls it AFTER the load ends (SUMMARIZE=0 during capture). Doing it mid-run
+# took fleet sched p99 from ~5ms to ~100ms (2026-10-14 run A).
 SUMMARY="$OUT/SUMMARY.txt"
 : >"$SUMMARY"
 for svc in $SERVICES; do
@@ -84,8 +94,10 @@ for svc in $SERVICES; do
     for kind in block mutex; do
       for d in "$OUT/$svc"/*/; do
         [ -s "$d/$kind.pb.gz" ] && [ -s "$d/$kind.base.pb.gz" ] || continue
-        echo "== $kind delta over ${CPU_SECONDS}s — $(basename "$d") (top 15)"
-        go tool pprof -top -nodecount=15 -base "$d/$kind.base.pb.gz" "$d/$kind.pb.gz" 2>/dev/null | sed -n '1,25p'
+        # Request-path only: background loops (janitors, refreshers, pollers)
+        # park in select/chanrecv forever and would swamp the top-N.
+        echo "== $kind delta over ${CPU_SECONDS}s, request path only — $(basename "$d") (cum top 20)"
+        go tool pprof -top -cum -nodecount=20 -focus="$REQ_FOCUS" -base "$d/$kind.base.pb.gz" "$d/$kind.pb.gz" 2>/dev/null | sed -n '6,30p'
       done
     done
     for d in "$OUT/$svc"/*/; do
@@ -94,4 +106,9 @@ for svc in $SERVICES; do
     echo
   } >>"$SUMMARY"
 done
-echo "perfprofile: done — $SUMMARY"
+echo "perfprofile: summary — $SUMMARY"
+}
+
+if [ "${SUMMARIZE:-1}" = "1" ] || [ "${SUMMARIZE_ONLY:-0}" = "1" ]; then
+  summarize
+fi

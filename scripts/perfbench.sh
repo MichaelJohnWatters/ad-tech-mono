@@ -73,13 +73,15 @@ run_stage() {
   if [ "$PROFILE" = "1" ]; then
     # Mid-run capture: steady state, clear of warm-up and drain.
     local secs=${DURATION%m}; secs=$((secs * 60 / 2))
-    DELAY=$secs scripts/perfprofile.sh "$prof_dir" >/tmp/perfbench-pprof-rps${rps}.log 2>&1 &
+    SUMMARIZE=0 DELAY=$secs scripts/perfprofile.sh "$prof_dir" >/tmp/perfbench-pprof-rps${rps}.log 2>&1 &
     prof_pid=$!
   fi
   start=$(date +%s)
   make loadtest RPS="$rps" DURATION="$DURATION" VERIFY=1 >"$log" 2>&1 || verify=RED
   end=$(date +%s)
   [ -n "$prof_pid" ] && wait "$prof_pid"
+  # Summarize only now — go tool pprof on the host mid-run perturbs the load.
+  [ -d "$prof_dir" ] && SUMMARIZE_ONLY=1 scripts/perfprofile.sh "$prof_dir" >>/tmp/perfbench-pprof-rps${rps}.log 2>&1
 
   echo "-- record + archive --"
   start_pf
