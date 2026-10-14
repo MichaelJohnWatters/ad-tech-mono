@@ -45,3 +45,41 @@ func TestBandit_SeedArm(t *testing.T) {
 		t.Errorf("unknown arm should not be created by SeedArm")
 	}
 }
+
+// A reseed from a lagging aggregate (present, but still below MinCalls) must
+// not un-judge a DSP the pod has already condemned locally — else a slow DSP
+// is put back in warm-up every reseed tick and re-called until it relearns
+// MinCalls (2026-10-14: the 500ms slowpoke at 20-43% of auctions after a
+// reset/boot while dsp_calls ingestion lagged). A WARM aggregate still wins,
+// so replicas keep converging on the cluster-global view.
+func TestSmartRouter_ReseedLaggingAggregateDoesNotUnjudge(t *testing.T) {
+	r := NewSmartRouter()
+	slow, ok := "http://slow", "http://ok"
+	for i := 0; i < 30; i++ {
+		r.RecordCall("display", slow, false, 0, 500e6, true)
+		r.RecordCall("display", ok, true, 1, 20e6, false)
+	}
+	has := func(got []string, want string) bool {
+		for _, g := range got {
+			if g == want {
+				return true
+			}
+		}
+		return false
+	}
+	if has(r.SelectDSPs("display", []string{slow, ok}), slow) {
+		t.Fatalf("precondition: slow DSP should be skipped after 30 timeouts")
+	}
+
+	// Lagging aggregate: only 5 rows landed in analytics so far.
+	r.Reseed([]DSPStats{{Channel: "display", DSPID: slow, TotalCalls: 5, TotalTimeouts: 4, TimeoutRate: 0.8}})
+	if has(r.SelectDSPs("display", []string{slow, ok}), slow) {
+		t.Errorf("lagging below-MinCalls aggregate re-admitted a locally-condemned DSP")
+	}
+
+	// A warm aggregate replaces local stats as before (here: it recovered).
+	r.Reseed([]DSPStats{{Channel: "display", DSPID: slow, TotalCalls: 500, TotalBids: 450, BidRate: 0.9, AvgBid: 2}})
+	if !has(r.SelectDSPs("display", []string{slow, ok}), slow) {
+		t.Errorf("warm aggregate should still overwrite local stats (cluster convergence)")
+	}
+}

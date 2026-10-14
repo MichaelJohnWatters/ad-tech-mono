@@ -47,6 +47,14 @@ type auctionMetrics struct {
 	// what turns "auction p95 is 900ms" into "fanout is 460 of it" without
 	// opening a single trace.
 	phaseDuration *prometheus.HistogramVec
+
+	// Per-DSP leg latency as the exchange saw it (request sent → response
+	// parsed, or → fan-out deadline for a leg still in flight). The fanout
+	// phase is the MAX over legs, so on its own it can't say WHICH bidder
+	// held the auction; this splits it. Labels: dsp_endpoint, channel,
+	// outcome = bid|no_bid|error|timeout. Bounded cardinality: configured
+	// endpoints × channels × 4.
+	dspLegDuration *prometheus.HistogramVec
 }
 
 func newAuctionMetrics(reg *prometheus.Registry) *auctionMetrics {
@@ -77,12 +85,18 @@ func newAuctionMetrics(reg *prometheus.Registry) *auctionMetrics {
 			Help:      "Per-phase auction latency: gates|routing|fanout|dealeval|finalize. Stack the p95s to see where auction time goes.",
 			Buckets:   []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5},
 		}, []string{"phase"}),
+		dspLegDuration: prometheus.NewHistogramVec(prometheus.HistogramOpts{
+			Namespace: "adtech",
+			Name:      "exchange_dsp_leg_duration_seconds",
+			Help:      "Per-DSP fan-out leg latency seen by the exchange. outcome=bid|no_bid|error|timeout (timeout = still in flight at the fan-out deadline, observed at the deadline).",
+			Buckets:   []float64{.001, .0025, .005, .01, .025, .05, .075, .1, .15, .25, .4, .5, .75, 1},
+		}, []string{"dsp_endpoint", "channel", "outcome"}),
 		auctionsWonTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "adtech",
 			Name:      "auctions_won_total",
 			Help:      "Auctions won per DSP endpoint. Paired with bids_received_total to chart bid/win/loss by DSP.",
 		}, []string{"dsp_endpoint"}),
 	}
-	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal, m.auctionsWonTotal, m.phaseDuration)
+	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal, m.auctionsWonTotal, m.phaseDuration, m.dspLegDuration)
 	return m
 }

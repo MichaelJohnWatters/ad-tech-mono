@@ -194,4 +194,14 @@ func TestPreloadIdentityResolver_Transitive(t *testing.T) {
 			t.Errorf("got %v, want [a b] (c behind a 0.5 edge)", got)
 		}
 	})
+	t.Run("maxOut stops the walk nearest-first", func(t *testing.T) {
+		// The bid path keeps only identity_max_linked ids; the walk must stop
+		// there and keep the NEAREST ones (BFS order), not wander the graph.
+		p := load(3, 0)
+		p.maxOut = 2
+		got, _ := p.ResolveIdentity(ctx, "u")
+		if !sortedEq(got, []string{"a", "b"}) {
+			t.Errorf("got %v, want [a b] (c is 3 hops — past the cap)", got)
+		}
+	})
 }

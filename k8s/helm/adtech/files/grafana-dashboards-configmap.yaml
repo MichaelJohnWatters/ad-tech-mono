@@ -817,6 +817,33 @@ data:
           }
         },
         {
+          "id": 30,
+          "title": "Exchange → DSP leg latency by bidder (p50 / p95)",
+          "type": "timeseries",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 58
+          },
+          "description": "Per-DSP fan-out leg latency as the exchange sees it (send → parsed response, or → fan-out deadline for a leg still in flight). Fanout phase p95 is the MAX over legs; this names the bidder holding the auction. A slow leg the SmartRouter should be skipping (timeout_rate > exchange.routing_max_timeout_rate) showing at full volume here = a routing problem, not a DSP one. Split by outcome with adtech_exchange_dsp_leg_duration_seconds{outcome=bid|no_bid|error|timeout}.",
+          "targets": [
+            {
+              "expr": "histogram_quantile(0.95, sum(rate(adtech_exchange_dsp_leg_duration_seconds_bucket[$__rate_interval])) by (dsp_endpoint, le))",
+              "legendFormat": "p95 {{dsp_endpoint}}"
+            },
+            {
+              "expr": "histogram_quantile(0.50, sum(rate(adtech_exchange_dsp_leg_duration_seconds_bucket[$__rate_interval])) by (dsp_endpoint, le))",
+              "legendFormat": "p50 {{dsp_endpoint}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            }
+          }
+        },
+        {
           "id": 24,
           "title": "Exchange auction phases (p95)",
           "type": "timeseries",
@@ -824,7 +851,7 @@ data:
             "h": 8,
             "w": 8,
             "x": 0,
-            "y": 58
+            "y": 66
           },
           "description": "Per-phase auction latency p95: gates (decode+adstxt/schain/sign), routing (DSP selection), fanout (bid collection — usually dominant), dealeval (deal match + winner), finalize (records + response encode). Mirrors the Jaeger span boundaries. A latency spike now names its phase.",
           "targets": [
@@ -847,7 +874,7 @@ data:
             "h": 8,
             "w": 8,
             "x": 8,
-            "y": 58
+            "y": 66
           },
           "description": "Per-phase bid-handler latency p95: parse (decode+privacy), audience (private/household segment lookups), campaign_loop (eligibility over the whole catalog — the phase that scales with campaign count; the O(campaigns) budget-read bug lived here), encode. All 3 local DSP deployments run this binary; external DSPs are outside-in only (dsp_calls).",
           "targets": [
@@ -870,7 +897,7 @@ data:
             "h": 8,
             "w": 8,
             "x": 16,
-            "y": 58
+            "y": 66
           },
           "description": "Per-phase serve latency p95: pre_auction (placement/segment/household work), auction (exchange round-trip), render (adserve + response build).",
           "targets": [
@@ -893,7 +920,7 @@ data:
             "h": 8,
             "w": 8,
             "x": 0,
-            "y": 66
+            "y": 74
           },
           "description": "Per-phase adserver serve latency p95: freqcap (Redis cap check, user+household), creative (resolver: L1/L2/object store), assemble (macro substitution + signed tracking URLs + response encode). Decomposes the SSP render leg — the biggest owned phase left after the 2026-08-05 auction-speed push.",
           "targets": [
@@ -916,7 +943,7 @@ data:
             "h": 1,
             "w": 24,
             "x": 0,
-            "y": 83
+            "y": 91
           }
         },
         {
@@ -1016,7 +1043,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 0,
-            "y": 65
+            "y": 73
           },
           "targets": [
             {
@@ -1033,7 +1060,7 @@ data:
             "h": 8,
             "w": 12,
             "x": 12,
-            "y": 65
+            "y": 73
           },
           "description": "Goroutine count and Go runtime total memory (in MiB). Goroutines climbing without coming down = leak. Memory climbing alongside RPS is fine; alongside no RPS is leak.",
           "targets": [
@@ -1049,7 +1076,6 @@ data:
         }
       ]
     }
-
   adtech-pressure.json: |
     {
       "uid": "adtech-pressure",

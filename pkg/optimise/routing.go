@@ -137,13 +137,28 @@ func (r *SmartRouter) Seed(stats []DSPStats) {
 // overwriting them each reseed tick would zero WinRate forever. Entries
 // absent from the aggregate keep their local state: a DSP whose calls
 // haven't landed in analytics yet must not lose its fresh stats.
+//
+// The same holds for an aggregate that is PRESENT but still below the
+// MinCalls warm-up gate while the local entry is past it: never let a reseed
+// un-judge a DSP. dsp_calls lags (NATS → ClickHouse), so right after a reset
+// — or for minutes after a cold boot while ingestion catches up — the
+// aggregate holds a handful of rows. Overwriting a locally-condemned slow DSP
+// with that count put it back inside warm-up every reseed tick, so it was
+// re-called until it relearned MinCalls locally, then knocked back again:
+// the 500ms slowpoke took ~20% of auctions for 5 minutes post-boot and 43%
+// for the first 30s after each reset (2026-10-14), holding fanout p95 at the
+// bid deadline.
 func (r *SmartRouter) Reseed(stats []DSPStats) {
+	minCalls := r.currentKnobs().MinCalls
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	for i := range stats {
 		s := stats[i]
 		key := channelDSPKey{channel: s.Channel, dspID: s.DSPID}
 		if old, ok := r.stats[key]; ok {
+			if old.TotalCalls > minCalls && s.TotalCalls <= minCalls {
+				continue
+			}
 			s.TotalWins = old.TotalWins
 			if s.TotalBids > 0 {
 				s.WinRate = float64(s.TotalWins) / float64(s.TotalBids)

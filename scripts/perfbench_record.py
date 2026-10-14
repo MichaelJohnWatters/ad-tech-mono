@@ -55,6 +55,22 @@ def phase_ms(q, metric):
     return query(f"1000 * histogram_quantile({q}, sum by (le) (rate({metric}[{W}])))")
 
 
+def leg_p95_by_dsp():
+    """{dsp_endpoint: p95 ms} from the exchange's per-leg histogram ({} pre-metric)."""
+    expr = ("1000 * histogram_quantile(0.95, sum by (dsp_endpoint, le) "
+            f"(rate(adtech_exchange_dsp_leg_duration_seconds_bucket[{W}])))")
+    try:
+        res = prom_get("/api/v1/query", query=expr, time=TS)["data"]["result"]
+    except Exception:
+        return {}
+    out = {}
+    for r in res:
+        v = float(r["value"][1])
+        if v == v:  # skip NaN (no samples)
+            out[r["metric"].get("dsp_endpoint", "?")] = round(v, 2)
+    return dict(sorted(out.items()))
+
+
 def l1_hit(vis):
     h = f'sum(increase(adtech_audience_l1_cache_hits_total{{visibility="{vis}"}}[{W}]))'
     m = f'sum(increase(adtech_audience_l1_cache_misses_total{{visibility="{vis}"}}[{W}]))'
@@ -103,6 +119,7 @@ entry = {
     # the A/B discriminator for the per-auction Redis read).
     "audience_l1_hit_pct_dsp": l1_hit("dsp_private"),
     "audience_l1_hit_pct_ssp": l1_hit("public"),
+    "dsp_leg_p95_ms": leg_p95_by_dsp(),
     "adserver_freqcap_p95_ms": phase_ms(0.95, 'adtech_adserver_serve_phase_duration_seconds_bucket{phase="freqcap"}'),
     "cluster_cpu_pct": query(f'100 * sum(rate(node_cpu_seconds_total{{mode!="idle"}}[{W}])) / count(node_cpu_seconds_total{{mode="idle"}})'),
     "irq_pct": query(f'100 * sum(rate(node_cpu_seconds_total{{mode=~"irq|softirq"}}[{W}])) / count(node_cpu_seconds_total{{mode="idle"}})'),

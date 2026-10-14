@@ -1359,13 +1359,15 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 		}()
 	}
 
+	// One encode per auction, shared read-only by every leg (it was encoded
+	// per DSP inside each goroutine — identical bytes, N× the work).
+	body, _ := json.Marshal(bidReq)
 	for i, endpoint := range endpoints {
 		dspID := fmt.Sprintf("dsp-%d", i)
 		endpoint := strings.TrimSpace(endpoint)
 		i := i // capture for goroutine
 
 		go func() {
-			body, _ := json.Marshal(bidReq)
 			var respBody []byte
 			var responseTime time.Duration
 			if grpcx.IsURL(endpoint) {
@@ -1529,6 +1531,11 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 					decision = "bid"
 				}
 				am.bidsReceivedTotal.WithLabelValues(result.endpoint, decision).Inc()
+				outcome := decision
+				if result.err != nil && result.timedOut {
+					outcome = "timeout"
+				}
+				am.dspLegDuration.WithLabelValues(result.endpoint, channel, outcome).Observe(result.latency.Seconds())
 			}
 			if emitEvents {
 				callEvents = append(callEvents, events.DSPCallEvent{
@@ -1560,6 +1567,12 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 				ep = strings.TrimSpace(ep)
 				if reported[ep] {
 					continue
+				}
+				// Latency truth for every unreported leg, warm-up or not —
+				// the router's cold-start grace is a routing decision, not
+				// an observability one.
+				if am != nil {
+					am.dspLegDuration.WithLabelValues(ep, channel, "timeout").Observe(elapsed.Seconds())
 				}
 				// Cold-start grace lives in RecordFanoutDeadline: a leg
 				// inside its MinCalls warm-up records nothing (locally OR as

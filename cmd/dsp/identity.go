@@ -109,6 +109,7 @@ func buildIdentityResolver(cfg *config.Config, log *slog.Logger) (*preloadIdenti
 		keys.DSP.IdentityMaxDepth.Get(cfg),
 		keys.DSP.IdentityMinConfidence.Get(cfg),
 		log)
+	p.maxOut = keys.DSP.IdentityMaxLinked.Get(cfg)
 	p.Start()
 	log.Info("dsp identity resolution enabled (in-memory preload)", "max_depth", p.maxDepth, "min_confidence", p.minConf)
 	return p, func() { p.Stop(); _ = db.Close() }
@@ -126,9 +127,15 @@ type preloadIdentityResolver struct {
 	interval time.Duration
 	maxDepth int     // BFS hop limit (1 = direct links only; >1 = transitive)
 	minConf  float64 // only traverse edges with confidence >= this
-	log      *slog.Logger
-	snap     atomic.Pointer[map[string][]postgres.IdentityLink]
-	stop     chan struct{}
+	// maxOut stops the walk once this many ids are found (0 = unbounded).
+	// The bid path folds in only dsp.identity_max_linked ids and BFS yields
+	// nearest-first, so walking past that cap was pure waste: the full
+	// depth-3 neighbourhood was ~48% of dsp-internal CPU (pprof, 2026-10-14)
+	// to return ids the caller discarded.
+	maxOut int
+	log    *slog.Logger
+	snap   atomic.Pointer[map[string][]postgres.IdentityLink]
+	stop   chan struct{}
 }
 
 func newPreloadIdentityResolver(loader graphLoader, interval time.Duration, maxDepth int, minConf float64, log *slog.Logger) *preloadIdentityResolver {
@@ -202,6 +209,9 @@ func (p *preloadIdentityResolver) ResolveIdentity(_ context.Context, id string) 
 				}
 				visited[lk.ID] = true
 				out = append(out, lk.ID)
+				if p.maxOut > 0 && len(out) >= p.maxOut {
+					return out, nil
+				}
 				next = append(next, lk.ID)
 			}
 		}
