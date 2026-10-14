@@ -49,3 +49,4 @@ Protocol + comparability rules: .claude/skills/perf-loadtest/SKILL.md.
 | 2026-10-03 19:15 | 82b7e11+dirty | 109.8 | 10m | 90.7 | GREEN | 0 | 29.17 | 246.41 | 49.72 | 348 | 94.84 | 0.5 | 46.89 | 45.8 | 3.305 | 88.73 | 14.31 | A/B after trace-segments 9b73215 |
 | 2026-10-03 19:45 | 4d956f7+dirty | 110 | 10m | 90.1 | GREEN | 0 | 11.58 | 88.06 | 30.01 | 111.11 | 42.23 | 0.49 | 23.79 | 18.62 | 4.9175 | 90.55 | 15.29 | A/B after trace-segments 9b73215, post rdctl-restart (clean VM) |
 | 2026-10-08 21:49 | 1755d082 | 259.3 | 5m | 64.1 | GREEN | 0 | 502.23 | 950.93 | 307.89 | 971.85 | 419.33 | 37.67 | 493.23 | 239.55 | -3.2125 | 92.44 | 12.18 | post-08 ceiling sweep (all levers in) |
+| 2026-10-14 22:54 | f4fc3357+dirty | 109.3 | 10m | 93.8 | GREEN | 0 | 211.92 | 892.62 | 93.03 | 913.32 | 232.9 | 2.5 | 233.48 | 148.06 | -2.0575 | 86.1 | 14.13 | L1 A/B: audience L1 cache ON (default), post-rdctl-restart warm stack |
