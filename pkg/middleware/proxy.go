@@ -88,6 +88,22 @@ func StripClientIdentityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// proxyTransport is shared by every ReverseProxy. They used DefaultTransport,
+// which keeps only 2 idle connections per upstream host — under load nearly
+// every proxied request (tracker beacons, SSP pass-through) dialed a fresh
+// TCP connection: ~18% of gateway CPU in Transport.dialConnFor at 250rps
+// (pprof 2026-10-15). A clone of DefaultTransport (same dial/TLS timeouts,
+// proxy, HTTP/2) with a pool sized for concurrent in-cluster upstreams.
+var proxyTransport = newProxyTransport()
+
+func newProxyTransport() *http.Transport {
+	t := http.DefaultTransport.(*http.Transport).Clone()
+	t.MaxIdleConns = 1024
+	t.MaxIdleConnsPerHost = 256
+	t.IdleConnTimeout = 90 * time.Second
+	return t
+}
+
 // ReverseProxy creates a simple reverse proxy handler that forwards requests
 // to a backend service. Used by the gateway to proxy API calls to internal services.
 func ReverseProxy(target string, log *slog.Logger) http.Handler {
@@ -96,7 +112,8 @@ func ReverseProxy(target string, log *slog.Logger) http.Handler {
 	// for the tracker click flow where the 302 location points at an
 	// external advertiser domain the gateway can't (and shouldn't) reach.
 	client := &http.Client{
-		Timeout: 30 * time.Second,
+		Timeout:   30 * time.Second,
+		Transport: proxyTransport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			return http.ErrUseLastResponse
 		},

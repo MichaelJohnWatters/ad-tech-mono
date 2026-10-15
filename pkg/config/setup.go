@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"github.com/MichaelJohnWatters/ad-tech-mono/pkg/httpx"
 	"log/slog"
 	"os"
 	"strconv"
@@ -98,6 +99,10 @@ func WithSeedDefaults(overrides map[string]string) SetupOption {
 //	        "dsp.no_bid_rate": "0.20",
 //	    }))
 func Setup(serviceName string, schema []SchemaEntry, log *slog.Logger, opts ...SetupOption) *ServiceConfig {
+	// Size the process-wide HTTP idle pool before any client runs — every
+	// service passes through here first (see pkg/httpx for why).
+	httpx.TuneDefaultTransport()
+
 	o := &setupOpts{}
 	for _, apply := range opts {
 		apply(o)
