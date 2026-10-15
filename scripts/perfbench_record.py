@@ -389,5 +389,11 @@ msg = (f"perfbench: {entry['date']} rps={RPS} fill={entry['fill_pct']}% "
        f"Co-Authored-By: Claude Fable 5 <noreply@anthropic.com>")
 sh(f"git add {LEDGER} {RESULTS} docs/perf/state/")
 commit_out = sh(f"git commit --no-verify -q -m {json.dumps(msg)} -- docs/perf") or "committed"
-push_out = sh("git push -q origin main 2>&1") or "pushed"
+# Opt out of the push (commit stays local): `git config perfbench.push false`
+# in your clone, or PERFBENCH_PUSH=0. Read at record time, so it also applies
+# to a run already in progress.
+if os.environ.get("PERFBENCH_PUSH", "1") == "0" or sh("git config --get perfbench.push").strip() == "false":
+    push_out = "not pushed (perfbench.push=false)"
+else:
+    push_out = sh("git push -q origin main 2>&1") or "pushed"
 print(f"run committed: {sh('git log --oneline -1')} ({push_out})")
