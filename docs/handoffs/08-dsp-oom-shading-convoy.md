@@ -370,6 +370,39 @@ NOT made default: under saturation (200+rps) healthy bidders' p95 reaches
 ~700ms, so 250ms display would cut 20%+ of bids. Key reset to empty;
 revisit on staging hardware (or ~300ms display) — owner's call.
 
+### Session 3b (2026-10-15 afternoon): cheaper auctions — measured wins
+
+Profiles at 250rps named the levers. Each shipped + A/B'd (perfbench, HPA
+pinned, fresh world, VERIFY GREEN, 0 errors throughout). All LOCAL commits.
+
+| Change | @110rps fanout p50/p95 | SSP auction p95 | @250 achieved | JetStream peak @250 |
+|---|---|---|---|---|
+| (pin 8af405c6) | 46.6 / 223 | 243 | 176.8 | 249k |
+| Exchange pooled fan-out transport | 36.9 / 189 | 224 | 185.0 | 245k |
+| + gateway proxy pool + fleet httpx.TuneDefaultTransport | 38.8 / 202 (noise) | 231 | 193.8 | 254k |
+| + dsp_call ONE message per auction | **28.9 / 145** | **204** | 192.2 | **139k** (end 97k -> 11k) |
+
+- **Pooled HTTP**: Go's DefaultTransport keeps 2 idle conns/host, so every
+  client without its own Transport re-dialed most requests under
+  concurrency — 12% of exchange CPU (`dialConnFor`) and 18% of gateway CPU.
+  Exchange: `cmd/exchange/transport.go` (256/host + dial counter
+  `adtech_exchange_fanout_dials_total`); gateway: shared proxyTransport in
+  `pkg/middleware/proxy.go`; everyone else: `pkg/httpx.TuneDefaultTransport`
+  called first in `config.Setup`. Residual dials at 250 (~170-210/s) are
+  legs cut at the deadline closing their conns — inherent.
+- **dsp_call per auction**: `adtech.optimise.dsp_call_auction` (one
+  envelope with all legs) replaces one message per leg; reporting expands
+  to identical dsp_calls rows. Rollback: `exchange.dsp_call_per_auction=false`.
+  Deploy order matters: reporting FIRST (interest-retention stream drops
+  messages that have no consumer yet).
+- 110rps freqcap p95 61 -> 43ms, DSP audience p95 47 -> 42, sched p99 9.1 ->
+  7.7ms. Demo ceiling now ~193rps (CPU-bound; fill 94.5% at 250 offered).
+- Not yet re-pinned: BASELINE still 8af405c6 — re-pin with a 110rps/30m run
+  when convenient (the 12:46 10m run is the reference until then).
+- Next levers: syscall share is still the top line everywhere (per-request
+  INFO logs on the DSP bid path -> Debug / sampled); audience-rt's
+  behaviour stream is now the residual backlog at 250.
+
 ### Gotchas recorded this session
 - The helm release had a FROZEN full values snapshot as user-supplied
   (since an Oct 8 `--reuse-values --set`), silently ignoring chart edits.
