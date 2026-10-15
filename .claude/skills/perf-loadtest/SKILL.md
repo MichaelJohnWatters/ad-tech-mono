@@ -126,9 +126,10 @@ deadbeat (99% no-bid → bid-rate-skipped), competitor3 = healthy market
 maker (:8098), competitor4 = COINFLIP (:8100, bids ~50% — mediocre but must
 NEVER be skipped; if it is, a skip-rule regression shipped). Expect
 dsp_calls to show comp1/comp2 at the ~0.2% ε-probe trickle (exchange.routing_explore_pct default 0.2 since 2026-10-15; was 1%) and comp3/comp4 at
-full volume. GOLDEN BASELINE: pinned in docs/perf/BASELINE (8af405c6, 2026-10-15,
-110rps/30m — fill 95.4%, fanout p50/p95 46.6/223ms, SSP auction p95 243,
-DSP audience p50/p95 4.8/47, sched p99 9.1ms, VERIFY GREEN); perfbench
+full volume. GOLDEN BASELINE: pinned in docs/perf/BASELINE (dfe8b951, 2026-10-15 15:46,
+110rps/30m — fill 95.4%, fanout p50/p95 30.2/103ms, SSP auction p95 185,
+render 84, freqcap 41, DSP audience p50/p95 3.2/42, sched p99 7.6ms, VERIFY
+GREEN); perfbench
 regresses against it automatically. 150rps SUSTAINED now saturates this VM
 (sched p99 ~90ms in 3 min; consumers lag then drain) — use 110 for latency
 pins, 150-250 only for throughput/demo ramps (~175rps achieved ceiling).

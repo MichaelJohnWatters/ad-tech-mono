@@ -1,3 +1,7 @@
+> **UPDATE 2026-10-15 15:46: BASELINE RE-PINNED to dfe8b951** (fanout p95
+> 223 -> 103ms after pooled HTTP + per-auction dsp_call + explore 0.2%; see
+> "Config A/B batch + BASELINE re-pin"). Original session-3 pin below.
+>
 > **DONE 2026-10-15 (session 3): BASELINE PINNED to 8af405c6 at 110rps/30m**
 > (clean + lossless: fill 95.4%, VERIFY GREEN, impressions = wins 188,819,
 > canary -$0.09, sched p99 9.1ms, JetStream max 2.2k; fanout p50/p95
@@ -458,6 +462,39 @@ match.
 retired: drop the per-leg publish + `exchange.dsp_call_per_auction`, keep
 reporting's per-leg consumer for one release to drain, then remove it and
 the `adtech.optimise.dsp_call` subject (PLAN NATS table + nats-events.d2).
+
+### Config A/B batch + BASELINE re-pin (2026-10-15 late afternoon)
+
+Harness: `scripts/perf-config-batch.sh` — same-session CONTROL + one arm per
+live knob, 110rps/10m via perfbench; each arm sets ONE config row, waits
+until every pod logs the change, runs, reverts (trap reverts on failure).
+Policy (owner): knobs that clearly improve things are ADOPTED (schema
+default + live rows), then BASELINE is re-pinned.
+
+| Arm (vs control) | Target | Control -> arm | Verdict |
+|---|---|---|---|
+| SSP L1 TTL 3s -> 30s | SSP hit % / segments p95 | 34.5 -> 40.0% / 44.9 -> 44.9ms | reject: tail not Redis misses (see lever: 25ms deadline overrun) |
+| DSP L1 TTL 3s -> 10s | DSP hit % / audience p95 | 60.6 -> 64.3% / 41.8 -> 42.3ms | reject |
+| **routing_explore_pct 1 -> 0.2** | fanout p95 / SSP auction p95 | **133 -> 109ms / 200 -> 186ms**, leg timeouts 0.23 -> 0.03% | **ADOPTED** (default + live row; verified comp1 share 0.28%) |
+| display deadline 300ms | fanout p95 / display fill | 133 -> 134 / 96.4 -> 96.6% | reject: doesn't bind @110 |
+
+Explore 0.2% trade-off: a recovered DSP is re-measured ~5x more slowly.
+The proper fix is a NON-BLOCKING shadow probe (keep 1% exploration without
+the probe auction waiting on the slow DSP) — top of the lever list.
+
+**BASELINE re-pinned to dfe8b951** (110rps/30m, 2026-10-15 15:46): fill
+95.4%, VERIFY GREEN, impressions = wins 188,846, canary -$0.03, fanout
+p50/p95 **30.2/103ms** (morning pin 46.6/223), SSP auction p95 185 (243),
+render 84 (114), freqcap 41 (61), DSP audience p50/p95 3.2/42, sched p99
+7.6ms, JetStream max 250 (2,236).
+
+**Lever list now (ranked):** (1) non-blocking shadow probe; (2) per-bidder
+adaptive deadlines (healthy legs' p95 ~61-76ms set the tail); (3) SSP
+segment phase overruns its 25ms deadline (p95 45ms — not Redis misses);
+(4) tracker per-beacon dedup SETNX + media gate (~22% of tracker CPU) and
+DSP win-path BudgetTracker Redis GET (~5%) -> batch / in-memory; (5)
+per-hop gRPC/HTTP/NATS framing syscalls (inherent; fewer hops is the big
+lever).
 
 ### Gotchas recorded this session
 - The helm release had a FROZEN full values snapshot as user-supplied
