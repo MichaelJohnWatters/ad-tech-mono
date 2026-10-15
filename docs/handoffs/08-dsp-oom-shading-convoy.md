@@ -261,14 +261,86 @@ pin + this doc (LOCAL — owner asked to keep later work unpushed).
   [25ms]); SSP stamps ssp.tmax (default 525ms = unchanged 500ms).
   **Per-channel**: exchange.bid_timeout_by_channel (default empty).
   e2e TestExchangeHonoursSSPTMax / TestExchangePerChannelBidTimeout.
-- **Reporting consumer lag**: batchProcess did 1-2 SEQUENTIAL Redis SETNX
-  per message -> 580k dsp_call / 144k impression pending at 150rps. Now 2
-  pipelined round trips per batch: drain ~910 -> ~3,600 msg/s on the same
-  backlog. Failure path releases ONLY keys the call newly set.
-- **dsp_call duplicates**: 227k byte-identical rows (~21%) from publisher
-  republish under NATS pressure (no business key). Key = trace|endpoint|
-  ts-ns (keeps legit video-pod multi-calls).
+- **Reporting consumer lag + dsp_call duplicates** — see the dedicated
+  subsection below (a5999c09).
 - Exchange marshals the bid request once per auction (was per leg).
+
+### Reporting consumer lag fix (a5999c09) — full record
+
+**Symptom.** The first 150rps/30m pin (2026-10-15 00:10, f1fb0e15) read
+VERIFY RED: 113,684 impressions recorded vs 252,618 client wins, ledger
+"fill 48.4%". Mid-run JetStream showed `reporting-optimise-dsp_call` 580k
+pending, `reporting-events-impression` 144k, `audience-rt` behaviour 71k.
+NOT loss: once drained, impressions = 253,374 unique (>= client wins).
+VERIFY samples mid-drain, and perfbench's `fill_pct` then reads VERIFY's
+impressions/auctions instead of the client's 95.0% — so a lagging run
+looks like a fill collapse in the ledger. Check the drain before calling
+it a regression.
+
+**Root cause.** `cmd/reporting/batch.go` `batchProcess` (shared by every
+core subject) did per-message dedup with a Redis SETNX **inside a serial
+loop** — one round trip per message for the message-id layer, plus a
+second for subjects with a business key (impressions etc.). A fetched
+batch of N cost N-2N sequential Redis round trips before its single
+ClickHouse insert, so consumer throughput ≈ 1 / Redis RTT, and under load
+(Redis queueing behind a saturated node) it fell below the event rate.
+dsp_call is the biggest stream (one event per DSP leg per auction).
+
+**Fix.** Dedup is now two PIPELINED round trips per batch (message-id
+keys for the whole batch, then business keys for the survivors):
+- `events.BatchDedupStore` (MarkProcessedMany) + `events.MarkProcessedMany`
+  helper with a serial fallback; `cache.SetNXBulk` (pipelined SETNX) on the
+  Redis client, forwarded by `SelfHealingL2`; `L2DedupAdapter` implements it.
+- Semantics unchanged: a pipeline executes in order, so a key repeated
+  within one batch is "new" only at its first position — same as N serial
+  calls. Order stays insert (durable) → bill → ack.
+- **Failure safety (the subtle part):** on a Redis error the batch is
+  nak'd (fail-closed, as before) and ONLY the keys this call newly set are
+  released (`releaseNew`). Releasing every key would also delete
+  pre-existing markers of genuinely processed messages and let their
+  redelivery double-count; releasing none would make the retry look like
+  a duplicate and drop it. The Redis pipeline reports per-command results
+  even on partial failure; the contract is documented on the interface.
+
+**dsp_call duplicates (found while verifying).** ClickHouse held 227k
+byte-identical dsp_calls rows (~21% of the pin's rows), concentrated in
+the heaviest-backlog window, with DIFFERENT stream sequences — i.e. the
+exchange published the same event twice (spool / ambiguous-ack republish
+under NATS pressure), which message-id dedup cannot catch. Impressions
+already had a business key; dsp_call had `bizKey: nil` because a trace can
+legitimately carry several calls per DSP (video pod sub-auctions). Key is
+now `trace_id|dsp_endpoint|timestamp-ns` — a republish carries the
+identical exchange-stamped timestamp, distinct calls never share one.
+These dups inflated the router's reseed aggregate.
+
+**Verification.**
+- Unit (cmd/reporting/batch_test.go): pipelined path = exactly 2 dedup
+  round trips per batch, never per message; partial pipeline failure
+  releases only own keys (pre-existing marker survives) and naks all;
+  dsp_call republish dropped while a distinct same-trace call lands;
+  existing serial-fallback tests unchanged and green.
+- Drain on the SAME backlog, measured from NATS `/jsz` (not Prometheus —
+  its pending series was scrape-stale and briefly showed a bogus 16
+  msg/s): old ~910 msg/s → new ~3,600 msg/s (ClickHouse ~4,000 rows/s).
+- e2e green: TestFraudDedupSameImpressionDropped,
+  TestTrackerRejectedEventDedup (+ the rest of the focused set).
+- No duplicate impressions (rows = uniqExact(trace_id)).
+
+**What it did NOT fix (and why).** At 150rps SUSTAINED the node saturates
+(fleet sched p99 ~90ms); reporting (50m request) then gets ~0.1 cores and
+the backlog still grows over a 30m run, draining after load stops (rerun
+pin a5999c09: peak 1.03M, VERIFY RED mid-drain, lossless). Raising the
+consumer requests to 200m did not help (see "Measured + rejected"). At
+110rps (the pin) the consumers keep up: JetStream max 2.2k, VERIFY GREEN.
+Remaining lever: cut dsp_call volume (sample, or one aggregate event per
+auction) — it is most of the JetStream load.
+
+**How to re-check.** During/after a run: `kubectl -n adtech exec nats-0 -c
+nats -- wget -q -O- 'http://localhost:8222/jsz?consumers=true'` →
+num_pending / num_ack_pending / num_redelivered per consumer;
+`perfbench` ledger fields jetstream_pending_max/_end/_top. Duplicate
+check: `SELECT count() - uniqExact(trace_id, dsp_endpoint, channel,
+latency_ms, timed_out, bid_price_usd, timestamp) FROM dsp_calls`.
 
 ### Measured + rejected (don't redo)
 - **Consumer CPU request 50m -> 200m** (reporting, audience-rt) at
