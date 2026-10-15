@@ -390,11 +390,7 @@ pinned, fresh world, VERIFY GREEN, 0 errors throughout). All LOCAL commits.
   `pkg/middleware/proxy.go`; everyone else: `pkg/httpx.TuneDefaultTransport`
   called first in `config.Setup`. Residual dials at 250 (~170-210/s) are
   legs cut at the deadline closing their conns — inherent.
-- **dsp_call per auction**: `adtech.optimise.dsp_call_auction` (one
-  envelope with all legs) replaces one message per leg; reporting expands
-  to identical dsp_calls rows. Rollback: `exchange.dsp_call_per_auction=false`.
-  Deploy order matters: reporting FIRST (interest-retention stream drops
-  messages that have no consumer yet).
+- **dsp_call per auction** — full record in the subsection below.
 - 110rps freqcap p95 61 -> 43ms, DSP audience p95 47 -> 42, sched p99 9.1 ->
   7.7ms. Demo ceiling now ~193rps (CPU-bound; fill 94.5% at 250 offered).
 - Not yet re-pinned: BASELINE still 8af405c6 — re-pin with a 110rps/30m run
@@ -402,6 +398,66 @@ pinned, fresh world, VERIFY GREEN, 0 errors throughout). All LOCAL commits.
 - Next levers: syscall share is still the top line everywhere (per-request
   INFO logs on the DSP bid path -> Debug / sampled); audience-rt's
   behaviour stream is now the residual backlog at 250.
+
+### dsp_call: one message per auction (session 3b) — full record
+
+**Why.** The exchange published one `adtech.optimise.dsp_call` message per
+DSP fan-out leg per auction — the largest JetStream stream (~legs ×
+auctions) and ~12% of exchange CPU in `publishJSONID` at 250rps (pprof).
+It was also most of reporting's backlog under load (the lag above).
+
+**Design.**
+- New subject `adtech.optimise.dsp_call_auction`, payload
+  `events.DSPCallAuctionEvent{schema_version, trace_id, auction_id, channel,
+  timestamp, calls[]}`; each `DSPCallLeg` carries every per-leg field
+  (dsp_endpoint, bid_received, bid_price_usd, latency_ms, timed_out,
+  no_bid_reason) plus ITS OWN timestamp. `events.DSPCallAuctionFromLegs`
+  folds the exchange's collected legs; `Publisher.DSPCallAuction` publishes.
+- Exchange (`fanOutToDSPs` deferred publish): one envelope per auction when
+  `exchange.dsp_call_per_auction` (live, default true); false = the old
+  per-leg path (instant rollback, no deploy).
+- Reporting consumes BOTH subjects, on the batch path
+  (`handleDSPCallAuctionBatch`) and the per-message path
+  (`handleDSPCallAuction`), expanding via `dspCallRowsFromAuction` into rows
+  field-for-field identical to the per-leg ones. So `dsp_calls`, the
+  SmartRouter reseed/warm-start, the trace timeline and dashboards are
+  untouched. All legs of a fetch go in ONE ClickHouse block insert.
+- Dedup per message: stream sequence + business key
+  `trace_id|envelope-timestamp-ns` (a publisher republish shares it,
+  distinct auctions never do).
+- Fixed alongside: the per-message per-leg handler dropped `NoBidReason`.
+
+**Deploy order (matters).** The `adtech` stream uses INTEREST retention: a
+message on a subject with no matching consumer is discarded. Deploy
+REPORTING first (creates `reporting-reporting-optimise-dsp_call_auction`),
+confirm the consumer exists in `/jsz`, THEN the exchange. Rolling back the
+exchange alone is always safe (reporting still consumes per-leg).
+
+**Verification.**
+- Unit: fold preserves every leg field; expansion is field-faithful (incl.
+  per-leg timestamp + no_bid_reason); envelope republish dropped; both
+  per-message paths keep NoBidReason.
+- e2e: `TestDSPCallTelemetryPerAuctionAndRollback` (both modes: exactly one
+  dsp_calls row per called DSP for the trace, no duplicate, internal DSP
+  present) + `TestAdCertBlockSurfacesInTrace` (per-DSP reason reaches
+  ClickHouse + trace) + `TestRoutingKnobsLiveAndConfigDeleteReverts`
+  (reseed fed by dsp_calls) — all green.
+- Live: 1,521 envelope messages / 30s at 50rps (~1 per auction), 0 per-leg.
+- A/B vs the fleet-pool runs: @110 fanout p50/p95 38.8/202 -> 28.9/145ms,
+  SSP auction p95 231 -> 204, freqcap 58 -> 43, JetStream peak 4,341 -> 332;
+  @250 offered JetStream peak 254k -> 139k, end 97k -> 11k, SSP auction p95
+  1563 -> 1338, fill 93.0 -> 94.5%.
+
+**How to re-check.** `/jsz?consumers=true` on nats-0: the `_auction`
+consumer's delivered count should grow ~1/auction and the per-leg
+`optimise-dsp_call` consumer should be flat. Row fidelity: `SELECT count(),
+uniqExact(dsp_endpoint) FROM adtech.dsp_calls WHERE trace_id = '<t>'` must
+match.
+
+**Later cleanup (not done).** Once confident, the per-leg path can be
+retired: drop the per-leg publish + `exchange.dsp_call_per_auction`, keep
+reporting's per-leg consumer for one release to drain, then remove it and
+the `adtech.optimise.dsp_call` subject (PLAN NATS table + nats-events.d2).
 
 ### Gotchas recorded this session
 - The helm release had a FROZEN full values snapshot as user-supplied
