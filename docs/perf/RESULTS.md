@@ -68,3 +68,4 @@ Protocol + comparability rules: .claude/skills/perf-loadtest/SKILL.md.
 | 2026-10-15 12:20 | d38294fa | 193.8 | 5m | 93 | GREEN | 0 | 451.21 | 955.2 | 228.08 | 1563.14 | 492.85 | 4.39 | 211.19 | 280.22 | -2.8975 | 91.28 | 11.84 | fleet pooled-HTTP A/B @250 (control = 11:57 row) |
 | 2026-10-15 12:46 | 5e858307 | 109.9 | 10m | 95.5 | GREEN | 0 | 28.94 | 144.78 | 46.58 | 203.74 | 89.22 | 1.55 | 42.08 | 43.05 | -0.055 | 92.52 | 12.6 | dsp_call PER-AUCTION A/B @110 (control = 12:12 fleet-pool row) |
 | 2026-10-15 12:55 | 03193d98 | 192.2 | 5m | 94.5 | GREEN | 0 | 392.27 | 936.52 | 234.11 | 1337.56 | 492.71 | 3.59 | 195.72 | 254.57 | -2.335 | 89.71 | 11.32 | dsp_call PER-AUCTION A/B @250 (control = 12:20 fleet-pool row) |
+| 2026-10-15 14:21 | 65a1ffda | 110 | 10m | 95.4 | GREEN | 0 | 29.69 | 133.33 | 46.24 | 199.5 | 85.77 | 1.43 | 41.78 | 41.75 | -0.025 | 92.83 | 12.83 | config batch: CONTROL (all defaults) |
