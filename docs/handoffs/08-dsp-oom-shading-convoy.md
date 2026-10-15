@@ -1,3 +1,13 @@
+> **DONE 2026-10-15 (session 3): BASELINE PINNED to 8af405c6 at 110rps/30m**
+> (clean + lossless: fill 95.4%, VERIFY GREEN, impressions = wins 188,819,
+> canary -$0.09, sched p99 9.1ms, JetStream max 2.2k; fanout p50/p95
+> 46.6/223ms). NOT 150rps: 150 sustained now saturates this VM (sched p99
+> ~90ms within 3 min). Demo number: **~175rps sustained, lossless, full
+> observability** (250 offered -> 176.8 achieved, latency-bound). Session 3
+> shipped profiling tooling, router reseed fix, batched Redis reads, tmax +
+> per-channel deadlines, reporting dedup pipelining + dsp_call republish
+> dedup — details in "Session 3" below. Autoscaling RE-ENABLED at the end.
+
 > **PROGRESS 2026-10-08 (session 2): root cause REFINED to a hard deadlock
 > and lever 1 FIXED IN CODE (not yet deployed/measured).** WinRateCurve
 > held RLock while calling t.Stats (second RLock) — with a writer waiting,
@@ -210,3 +220,101 @@ larger. Next concrete levers, ranked: (1) warm-cache marketplace_grants,
   fix session's final measured run** (`--set global.autoscaling=true`).
 - World state after this session: budgets largely depleted (two 10m runs);
   reset + reseed before any comparable run.
+
+## Session 3 (2026-10-14/15): pin, profiling, and what it found
+
+Commits: f4fc3357 d13682a3 f1fb0e15 a5999c09 (pushed); 8af405c6 + BASELINE
+pin + this doc (LOCAL — owner asked to keep later work unpushed).
+
+### Tooling
+- `scripts/perfprofile.sh`: CPU / block+mutex delta (armed only for the
+  window) / heap / allocs / goroutines from EVERY pod of every hot service
+  via kubectl exec; perfbench runs it at mid-run (PROFILE=0 to skip) into
+  `perf-archives/<stamp>/pprof/` + SUMMARY.txt. **GOTCHA: summarise AFTER
+  the load** — go tool pprof on the host mid-run took fleet sched p99
+  ~5 -> ~100ms (run 2026-10-14 22:54, annotated contaminated).
+- Ledger gained: per-bidder leg p50/p95/timeout%/skip%, per-channel
+  fill/deadline/timeout%, Redis CPU/throttle, JetStream pending
+  max/end/top, L1 hit %, DSP audience p50, SSP segments p95.
+- perfbench push opt-out: `git config perfbench.push false` (set in the
+  owner's clone) or PERFBENCH_PUSH=0.
+- New metrics: `adtech_exchange_dsp_leg_duration_seconds{dsp_endpoint,
+  channel,outcome}`, `adtech_exchange_fanout_deadline_seconds{channel}`;
+  `adtech_auctions_total{channel}` is now the REQUEST channel (was always
+  "all"). Panels: per-bidder leg latency + deadline-vs-timeouts (latency
+  dashboard), Redis CPU + throttling (stack pressure).
+
+### Findings + fixes (each unit-tested; e2e where cross-service)
+- **Router reseed un-judge bug**: a lagging dsp_calls aggregate below
+  MinCalls overwrote locally-condemned stats every 5s -> slowpoke at 43% of
+  auctions for ~30s after each reset, ~20% for minutes post-boot. Reseed
+  no longer un-warms a judged DSP. Live: ~1% from the first 15s.
+- **Identity BFS** walked the whole depth-3 neighbourhood per bid (~48% of
+  dsp-internal CPU) to return ids the caller discarded; stops at
+  identity_max_linked (identical output, nearest-first).
+- **Batched Redis reads**: DSP user + linked ids (up to 11 sequential
+  round trips) and SSP user/household/hashed-email (3 goroutines) are now
+  ONE pipelined call each, through the L1 cache (misses only) and probe.
+- **Audience L1 cache A/B** (110rps): DSP audience p50 10.4 -> 6.8ms;
+  p95 unchanged (~70ms, misses wait on Redis under load). Kept on.
+- **tmax**: fan-out deadline = min(channel timeout, tmax - tmax_margin
+  [25ms]); SSP stamps ssp.tmax (default 525ms = unchanged 500ms).
+  **Per-channel**: exchange.bid_timeout_by_channel (default empty).
+  e2e TestExchangeHonoursSSPTMax / TestExchangePerChannelBidTimeout.
+- **Reporting consumer lag**: batchProcess did 1-2 SEQUENTIAL Redis SETNX
+  per message -> 580k dsp_call / 144k impression pending at 150rps. Now 2
+  pipelined round trips per batch: drain ~910 -> ~3,600 msg/s on the same
+  backlog. Failure path releases ONLY keys the call newly set.
+- **dsp_call duplicates**: 227k byte-identical rows (~21%) from publisher
+  republish under NATS pressure (no business key). Key = trace|endpoint|
+  ts-ns (keeps legit video-pod multi-calls).
+- Exchange marshals the bid request once per auction (was per leg).
+
+### Measured + rejected (don't redo)
+- **Consumer CPU request 50m -> 200m** (reporting, audience-rt) at
+  150rps/10m: backlog peak WORSE (352k vs 254k), serving + sched flat
+  (~90ms both). The node is saturated; a request only reshuffles a fixed
+  budget. Reverted.
+- **Redis is not the bottleneck**: 0.11-0.14 cores at every rate, no
+  throttling; freqcap tail tracks fleet sched p99 (node saturation).
+- adserver freqcap is already ONE Redis round trip per serve (Lua) —
+  nothing to batch.
+
+### Demo ramp (2026-10-15, 5m/stage, fresh world, full observability)
+150/200/250 offered -> 148.8/169.3/176.8 achieved; all VERIFY GREEN,
+0 errors, fill 95.3/94.5/94.1%, canary <= $1.7. Throughput is
+latency-bound (simulator's 300 workers / ~1.5s requests), not failing.
+Healthy-bidder timeouts 2% -> ~20% at 250 (VM contention past 500ms).
+JetStream drained to 0 after each stage. Present ~175rps as the demo
+number; show latency at 110rps (baseline).
+
+### Per-channel timeout A/B (110rps/10m)
+Control (empty, 500ms everywhere) vs display=250ms,native=250ms,
+video/ctv/audio=600ms: fill 95.5 vs 95.4% (display 96.54 vs 96.55%),
+fanout p50/p95 53/232 -> 48/220ms, SSP auction p95 249 -> 242, render
+136 -> 116ms, display/native leg timeouts 0.25 -> 0.67%. Small real win
+at normal load (mostly: the slowpoke's 1% probes cut at 250 not 500).
+NOT made default: under saturation (200+rps) healthy bidders' p95 reaches
+~700ms, so 250ms display would cut 20%+ of bids. Key reset to empty;
+revisit on staging hardware (or ~300ms display) — owner's call.
+
+### Gotchas recorded this session
+- The helm release had a FROZEN full values snapshot as user-supplied
+  (since an Oct 8 `--reuse-values --set`), silently ignoring chart edits.
+  Upgrade with `helm upgrade adtech k8s/helm/adtech -n default --set
+  global.autoscaling=<bool>` (no --reuse-values); diff `helm get values`
+  first if unsure.
+- kubelet image GC evicted adtech-migrate (stuck post-upgrade hook):
+  `docker builder prune -f` (67GB cache) + rebuild Dockerfile.migrate.
+- `redis-cli --latency` inside the pod reads healthy while clients see
+  queueing — judge Redis by DSP audience / freqcap phases + sched p99.
+- Prometheus `jetstream_consumer_num_pending` is scrape-stale for short
+  windows; measure drain via NATS /jsz (ack_floor / num_pending) instead.
+- TestSchemaSizes dsp count was stale since 1755d082 (fixed).
+
+### Next levers (attributed)
+1. Saturation knee ~150rps is CPU: infra floor + per-request work. The
+   per-bidder legs at 200+ show the competitor DSPs' own tails dominate.
+2. dsp_call volume (1 event per leg per auction) is the biggest JetStream
+   stream — sample it or aggregate per auction to cut pipeline load.
+3. Staging hardware (handoff 03) for a real high-RPS number.

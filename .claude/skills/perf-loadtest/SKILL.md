@@ -126,9 +126,19 @@ deadbeat (99% no-bid → bid-rate-skipped), competitor3 = healthy market
 maker (:8098), competitor4 = COINFLIP (:8100, bids ~50% — mediocre but must
 NEVER be skipped; if it is, a skip-rule regression shipped). Expect
 dsp_calls to show comp1/comp2 at the ~1% ε-probe trickle and comp3/comp4 at
-full volume. GOLDEN BASELINE: pinned in docs/perf/BASELINE (0821d1c,
-10cpu/20GiB VM — auction p95 58.8ms, fill ~92-94%); perfbench regresses
-against it automatically.
+full volume. GOLDEN BASELINE: pinned in docs/perf/BASELINE (8af405c6, 2026-10-15,
+110rps/30m — fill 95.4%, fanout p50/p95 46.6/223ms, SSP auction p95 243,
+DSP audience p50/p95 4.8/47, sched p99 9.1ms, VERIFY GREEN); perfbench
+regresses against it automatically. 150rps SUSTAINED now saturates this VM
+(sched p99 ~90ms in 3 min; consumers lag then drain) — use 110 for latency
+pins, 150-250 only for throughput/demo ramps (~175rps achieved ceiling).
+
+Profiles: perfbench captures pprof from every hot-path pod at mid-run
+(scripts/perfprofile.sh → perf-archives/<stamp>/pprof/SUMMARY.txt) and
+summarises AFTER the load — never run `go tool pprof` on the host mid-run
+(it perturbed fleet sched p99 ~5→~100ms). The ledger also records
+per-bidder leg p50/p95/timeout/skip %, per-channel fill/deadline/timeouts,
+Redis CPU/throttle and JetStream backlog.
 
 ## Iron rule (thrice-proven)
 
