@@ -71,3 +71,4 @@ Protocol + comparability rules: .claude/skills/perf-loadtest/SKILL.md.
 | 2026-10-15 14:21 | 65a1ffda | 110 | 10m | 95.4 | GREEN | 0 | 29.69 | 133.33 | 46.24 | 199.5 | 85.77 | 1.43 | 41.78 | 41.75 | -0.025 | 92.83 | 12.83 | config batch: CONTROL (all defaults) |
 | 2026-10-15 14:33 | d2ef3111 | 109.9 | 10m | 95.5 | GREEN | 0 | 29.66 | 143.86 | 46.1 | 203.13 | 87.78 | 1.47 | 42.16 | 42.67 | -0.0775 | 92.83 | 12.84 | config batch: T1 ssp L1 TTL 30s (ssp.audience_l1_cache_ttl=30s) |
 | 2026-10-15 14:45 | 1cd2bf58 | 109.8 | 10m | 95.3 | GREEN | 0 | 30.19 | 132.3 | 46.62 | 198.48 | 86.6 | 1.62 | 42.26 | 42.19 | -0.07 | 93.05 | 12.63 | config batch: T2 dsp L1 TTL 10s (dsp.audience_l1_cache_ttl=10s) |
+| 2026-10-15 14:57 | 91a1b704 | 110 | 10m | 95.6 | GREEN | 0 | 28.86 | 109.05 | 46.1 | 186.33 | 83.31 | 1.59 | 41.41 | 40.97 | -0.0775 | 92.73 | 12.61 | config batch: T3 explore 0.2% (exchange.routing_explore_pct=0.2) |
