@@ -162,6 +162,53 @@ type DSPCallEvent struct {
 	Timestamp   time.Time `json:"timestamp"`
 }
 
+// DSPCallAuctionEvent is every fan-out leg of ONE auction in one message
+// (SubjectDSPCallAuction). Calls[i] carries exactly the per-leg fields of a
+// DSPCallEvent (incl. its own Timestamp), so reporting expands it into rows
+// identical to the per-leg subject's. Timestamp is the envelope's publish
+// time — the republish-dedup identity together with TraceID.
+type DSPCallAuctionEvent struct {
+	SchemaVersion int          `json:"schema_version"`
+	TraceID       string       `json:"trace_id"`
+	AuctionID     string       `json:"auction_id"`
+	Channel       string       `json:"channel"`
+	Calls         []DSPCallLeg `json:"calls"`
+	Timestamp     time.Time    `json:"timestamp"`
+}
+
+// DSPCallLeg is one fan-out leg inside a DSPCallAuctionEvent.
+type DSPCallLeg struct {
+	DSPEndpoint string    `json:"dsp_endpoint"`
+	BidReceived bool      `json:"bid_received"`
+	BidPriceUSD float64   `json:"bid_price_usd"`
+	LatencyMs   int64     `json:"latency_ms"`
+	TimedOut    bool      `json:"timed_out"`
+	NoBidReason string    `json:"no_bid_reason,omitempty"`
+	Timestamp   time.Time `json:"timestamp"`
+}
+
+// DSPCallAuctionFromLegs folds per-leg events (one auction) into the envelope.
+// Trace/auction/channel come from the first leg — every leg of one auction
+// shares them. Returns ok=false for an empty slice (nothing to publish).
+func DSPCallAuctionFromLegs(legs []DSPCallEvent, now time.Time) (DSPCallAuctionEvent, bool) {
+	if len(legs) == 0 {
+		return DSPCallAuctionEvent{}, false
+	}
+	ev := DSPCallAuctionEvent{
+		SchemaVersion: CurrentSchemaVersion,
+		TraceID:       legs[0].TraceID, AuctionID: legs[0].AuctionID, Channel: legs[0].Channel,
+		Calls:     make([]DSPCallLeg, len(legs)),
+		Timestamp: now,
+	}
+	for i, l := range legs {
+		ev.Calls[i] = DSPCallLeg{
+			DSPEndpoint: l.DSPEndpoint, BidReceived: l.BidReceived, BidPriceUSD: l.BidPriceUSD,
+			LatencyMs: l.LatencyMs, TimedOut: l.TimedOut, NoBidReason: l.NoBidReason, Timestamp: l.Timestamp,
+		}
+	}
+	return ev, true
+}
+
 // AuctionCompleteEvent includes all bids and timing (for analytics).
 type AuctionCompleteEvent struct {
 	SchemaVersion int          `json:"schema_version"`

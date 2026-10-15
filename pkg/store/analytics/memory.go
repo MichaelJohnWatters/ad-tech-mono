@@ -819,6 +819,16 @@ func (s *MemoryStore) DSPCallStats(_ context.Context, since time.Time) ([]DSPCal
 	return out, nil
 }
 
+// DSPCalls returns a copy of every stored dsp_calls row, in insert order
+// (test read-back of field fidelity).
+func (s *MemoryStore) DSPCalls() []DSPCallEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]DSPCallEvent, len(s.dspCalls))
+	copy(out, s.dspCalls)
+	return out
+}
+
 // DSPCallCount returns how many DSP-call rows were recorded for an endpoint
 // (optionally filtered to a channel). Test/ops helper.
 func (s *MemoryStore) DSPCallCount(channel, endpoint string) int {

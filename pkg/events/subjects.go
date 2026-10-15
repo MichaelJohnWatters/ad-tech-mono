@@ -70,6 +70,16 @@ const (
 	// auction), so it's sample-able at the exchange.
 	SubjectDSPCall = "adtech.optimise.dsp_call"
 
+	// SubjectDSPCallAuction carries ONE DSPCallAuctionEvent per auction with
+	// every fan-out leg in Calls (Exchange → Reporting), replacing one
+	// SubjectDSPCall message per leg. dsp_call was the largest JetStream
+	// stream (≈ legs × auctions) and ~12% of exchange CPU went to publishing
+	// it; reporting expands the envelope into the SAME per-leg dsp_calls
+	// rows, so ClickHouse, the router reseed and the trace timeline are
+	// unchanged. Reporting consumes both subjects (rollback: the exchange's
+	// exchange.dsp_call_per_auction=false reverts to per-leg publishing).
+	SubjectDSPCallAuction = "adtech.optimise.dsp_call_auction"
+
 	// Publisher-adserver served-impression subjects. SubjectDirectWin
 	// fires every time a direct-sold line item (sponsorship / guaranteed
 	// / house) gets served; SubjectPrebidOutboundWin fires when an

@@ -47,6 +47,9 @@ type channelTimeouts struct {
 
 var channelTimeoutCache atomic.Pointer[channelTimeouts]
 
+// dspCallPerAuctionFn reads exchange.dsp_call_per_auction (live); set in main.
+var dspCallPerAuctionFn = func() bool { return true }
+
 // channelTimeoutsRawFn reads exchange.bid_timeout_by_channel (live); set in
 // main. Package-level like tmaxMarginFn.
 var channelTimeoutsRawFn = func() string { return "" }

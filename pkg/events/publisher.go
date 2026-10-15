@@ -154,6 +154,14 @@ func (p *Publisher) DSPCall(ctx context.Context, event DSPCallEvent) error {
 	return p.PublishJSON(ctx, SubjectDSPCall, event)
 }
 
+// DSPCallAuction publishes every fan-out leg of one auction as ONE message.
+func (p *Publisher) DSPCallAuction(ctx context.Context, event DSPCallAuctionEvent) error {
+	if event.SchemaVersion == 0 {
+		event.SchemaVersion = CurrentSchemaVersion
+	}
+	return p.PublishJSON(ctx, SubjectDSPCallAuction, event)
+}
+
 func (p *Publisher) BudgetDepleted(ctx context.Context, event BudgetDepletedEvent) error {
 	if event.SchemaVersion == 0 {
 		event.SchemaVersion = CurrentSchemaVersion

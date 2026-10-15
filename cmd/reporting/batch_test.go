@@ -527,3 +527,78 @@ func TestBatch_DSPCall_RepublishDedupedDistinctCallsKept(t *testing.T) {
 		t.Fatalf("rows=%d acks=%d, want 2 rows (republish dropped, distinct kept) / 3 acks", fi.rows, st.acks)
 	}
 }
+
+func dspAuctionMsg(seq string, ev events.DSPCallAuctionEvent, st *ackState) *events.Message {
+	data, _ := json.Marshal(ev)
+	return events.NewMessage(events.SubjectDSPCallAuction, data, "", seq,
+		func() error { atomic.AddInt32(&st.acks, 1); return nil },
+		func() error { atomic.AddInt32(&st.naks, 1); return nil })
+}
+
+// recordingInserter captures the dsp_calls rows so field fidelity can be checked.
+type recordingInserter struct {
+	fakeBatchInserter
+	dsp []*analytics.DSPCallEvent
+}
+
+func (r *recordingInserter) InsertDSPCalls(ctx context.Context, es []*analytics.DSPCallEvent) error {
+	r.dsp = append(r.dsp, es...)
+	return r.fakeBatchInserter.InsertDSPCalls(ctx, es)
+}
+
+// The per-auction envelope expands into the SAME per-leg rows the per-leg
+// subject produced (incl. each leg's own timestamp + no-bid reason), all
+// legs of a fetch in ONE insert; a republished envelope (new sequence, same
+// trace + envelope timestamp) is dropped.
+func TestBatch_DSPCallAuction_ExpandsLegsAndDedupsRepublish(t *testing.T) {
+	ri := &recordingInserter{}
+	c := newBatchConsumer(ri, newFakeDedup(), nil)
+	st := &ackState{}
+	t0 := time.Date(2026, 10, 15, 12, 0, 0, 7, time.UTC)
+	env := func(trace string, at time.Time) events.DSPCallAuctionEvent {
+		return events.DSPCallAuctionEvent{TraceID: trace, AuctionID: trace, Channel: "display", Timestamp: at,
+			Calls: []events.DSPCallLeg{
+				{DSPEndpoint: "http://a", BidReceived: true, BidPriceUSD: 3, LatencyMs: 20, Timestamp: at.Add(-time.Millisecond)},
+				{DSPEndpoint: "http://b", TimedOut: true, LatencyMs: 500, NoBidReason: "fanout_deadline", Timestamp: at.Add(-2 * time.Millisecond)},
+				{DSPEndpoint: "http://c", NoBidReason: "adcert_stale", LatencyMs: 9, Timestamp: at.Add(-3 * time.Millisecond)},
+			}}
+	}
+	msgs := []*events.Message{
+		dspAuctionMsg("s1", env("t1", t0), st),
+		dspAuctionMsg("s2", env("t1", t0), st), // republish of t1's envelope
+		dspAuctionMsg("s3", env("t2", t0.Add(time.Second)), st),
+	}
+	if err := c.handleDSPCallAuctionBatch(context.Background(), msgs); err != nil {
+		t.Fatal(err)
+	}
+	if ri.calls != 1 || len(ri.dsp) != 6 || st.acks != 3 {
+		t.Fatalf("calls=%d rows=%d acks=%d, want 1 insert / 6 rows (2 auctions × 3 legs) / 3 acks", ri.calls, len(ri.dsp), st.acks)
+	}
+	r := ri.dsp[2]
+	if r.TraceID != "t1" || r.Channel != "display" || r.DSPEndpoint != "http://c" || r.NoBidReason != "adcert_stale" ||
+		r.LatencyMs != 9 || !r.Timestamp.Equal(t0.Add(-3*time.Millisecond)) {
+		t.Fatalf("leg row not field-faithful: %+v", r)
+	}
+}
+
+// Per-message path: the envelope expands too, and the per-leg handler now
+// keeps NoBidReason (it silently dropped it before).
+func TestPerMessage_DSPCallPaths_KeepNoBidReason(t *testing.T) {
+	store := analytics.NewMemory()
+	c := NewEventConsumer(testLog(), store, nil)
+	st := &ackState{}
+	leg, _ := json.Marshal(events.DSPCallEvent{TraceID: "p1", DSPEndpoint: "http://a", NoBidReason: "adcert_invalid", Timestamp: time.Now()})
+	_ = c.handleDSPCall(context.Background(), events.NewMessage(events.SubjectDSPCall, leg, "", "x1",
+		func() error { atomic.AddInt32(&st.acks, 1); return nil }, func() error { atomic.AddInt32(&st.naks, 1); return nil }))
+	envData, _ := json.Marshal(events.DSPCallAuctionEvent{TraceID: "p2", Timestamp: time.Now(),
+		Calls: []events.DSPCallLeg{{DSPEndpoint: "http://a"}, {DSPEndpoint: "http://b", NoBidReason: "fanout_deadline"}}})
+	_ = c.handleDSPCallAuction(context.Background(), events.NewMessage(events.SubjectDSPCallAuction, envData, "", "x2",
+		func() error { atomic.AddInt32(&st.acks, 1); return nil }, func() error { atomic.AddInt32(&st.naks, 1); return nil }))
+	rows := store.DSPCalls()
+	if st.acks != 2 || len(rows) != 3 {
+		t.Fatalf("acks=%d rows=%d, want 2/3", st.acks, len(rows))
+	}
+	if rows[0].NoBidReason != "adcert_invalid" || rows[2].NoBidReason != "fanout_deadline" {
+		t.Fatalf("no_bid_reason lost: %+v", rows)
+	}
+}

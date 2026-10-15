@@ -673,6 +673,7 @@ func (c *EventConsumer) RegisterNATSSubscriptions(bus events.EventBus) error {
 		events.SubjectAudio:                  c.handleAudio,
 		events.SubjectServeNoFill:            c.handleServeNoFill,
 		events.SubjectDSPCall:                c.handleDSPCall,
+		events.SubjectDSPCallAuction:         c.handleDSPCallAuction,
 		// Profile-store tables (ADR 0006 phase 1). Registered here too so the
 		// data still lands in ClickHouse when the batch consumer is disabled;
 		// when it IS enabled these are removed below and served in bulk via
@@ -1342,10 +1343,37 @@ func (c *EventConsumer) handleDSPCall(ctx context.Context, msg *events.Message) 
 	e := analytics.DSPCallEvent{
 		TraceID: src.TraceID, AuctionID: src.AuctionID, Channel: src.Channel,
 		DSPEndpoint: src.DSPEndpoint, BidReceived: src.BidReceived, BidPriceUSD: src.BidPriceUSD,
-		LatencyMs: src.LatencyMs, TimedOut: src.TimedOut, SchemaVersion: 1, Timestamp: src.Timestamp,
+		LatencyMs: src.LatencyMs, TimedOut: src.TimedOut, NoBidReason: src.NoBidReason,
+		SchemaVersion: 1, Timestamp: src.Timestamp,
 	}
 	if err := bi.InsertDSPCalls(ctx, []*analytics.DSPCallEvent{&e}); err != nil {
 		c.log.Error("failed to write dsp_call", "error", err, "trace_id", e.TraceID)
+		return msg.Nak()
+	}
+	return msg.Ack()
+}
+
+// handleDSPCallAuction is the per-message path for the per-auction envelope:
+// expand to per-leg rows, one insert.
+func (c *EventConsumer) handleDSPCallAuction(ctx context.Context, msg *events.Message) error {
+	var ev events.DSPCallAuctionEvent
+	if err := json.Unmarshal(msg.Data, &ev); err != nil {
+		c.log.Error("failed to decode dsp_call_auction event", "error", err)
+		return msg.Ack()
+	}
+	if ev.Timestamp.IsZero() {
+		ev.Timestamp = time.Now()
+	}
+	bi, ok := c.store.(analytics.BatchInserter)
+	if !ok {
+		return msg.Ack() // backend can't store dsp_calls; drop silently
+	}
+	rows := dspCallRowsFromAuction(&ev)
+	if len(rows) == 0 {
+		return msg.Ack()
+	}
+	if err := bi.InsertDSPCalls(ctx, rows); err != nil {
+		c.log.Error("failed to write dsp_call_auction", "error", err, "trace_id", ev.TraceID)
 		return msg.Nak()
 	}
 	return msg.Ack()

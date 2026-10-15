@@ -65,6 +65,7 @@ func main() {
 	knobs := NewKnobs(sc)
 	tmaxMarginFn = config.NewLiveDuration(sc.Manager, sc.Cfg, keys.Exchange.TMaxMargin.Key(), keys.Exchange.TMaxMargin.Default()).Value
 	channelTimeoutsRawFn = func() string { return keys.Exchange.BidTimeoutByChannel.Get(cfg) }
+	dspCallPerAuctionFn = func() bool { return keys.Exchange.DSPCallPerAuction.Get(cfg) }
 	port := keys.Exchange.Port.Get(cfg)
 	// dspEndpointsFn reads the in-memory config map per auction (cheap;
 	// it's a sync.RWMutex-guarded map lookup, not a Postgres query). The
@@ -1380,6 +1381,13 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 			}
 			evs := callEvents
 			pctx := context.WithoutCancel(ctx)
+			if dspCallPerAuctionFn() {
+				// One message per auction (all legs) — see SubjectDSPCallAuction.
+				if env, ok := events.DSPCallAuctionFromLegs(evs, time.Now()); ok {
+					go func() { _ = pub.DSPCallAuction(pctx, env) }()
+				}
+				return
+			}
 			go func() {
 				for i := range evs {
 					_ = pub.DSPCall(pctx, evs[i])

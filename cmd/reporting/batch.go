@@ -564,6 +564,59 @@ func (c *EventConsumer) handleDSPCallBatch(ctx context.Context, msgs []*events.M
 	)
 }
 
+// dspCallRowsFromAuction expands a per-auction envelope into the per-leg
+// dsp_calls rows — field-for-field what the per-leg subject produces.
+func dspCallRowsFromAuction(ev *events.DSPCallAuctionEvent) []*analytics.DSPCallEvent {
+	rows := make([]*analytics.DSPCallEvent, 0, len(ev.Calls))
+	for _, l := range ev.Calls {
+		ts := l.Timestamp
+		if ts.IsZero() {
+			ts = ev.Timestamp
+		}
+		rows = append(rows, &analytics.DSPCallEvent{
+			TraceID: ev.TraceID, AuctionID: ev.AuctionID, Channel: ev.Channel,
+			DSPEndpoint: l.DSPEndpoint, BidReceived: l.BidReceived, BidPriceUSD: l.BidPriceUSD,
+			LatencyMs: l.LatencyMs, TimedOut: l.TimedOut, NoBidReason: l.NoBidReason,
+			SchemaVersion: 1, Timestamp: ts,
+		})
+	}
+	return rows
+}
+
+// handleDSPCallAuctionBatch consumes the per-auction envelope subject: dedup
+// per MESSAGE (stream sequence + business key trace|envelope-ts-ns, which a
+// publisher republish shares and distinct auctions never do), then ONE block
+// insert of every expanded leg in the fetch.
+func (c *EventConsumer) handleDSPCallAuctionBatch(ctx context.Context, msgs []*events.Message) error {
+	return batchProcess(ctx, c, msgs,
+		func(data []byte) (*events.DSPCallAuctionEvent, bool) {
+			var ev events.DSPCallAuctionEvent
+			if err := json.Unmarshal(data, &ev); err != nil {
+				c.log.Error("batch: decode dsp_call_auction", "error", err)
+				return nil, false
+			}
+			if ev.Timestamp.IsZero() {
+				ev.Timestamp = time.Now()
+			}
+			return &ev, true
+		},
+		func(ev *events.DSPCallAuctionEvent) string {
+			return ev.TraceID + "|" + strconv.FormatInt(ev.Timestamp.UnixNano(), 10)
+		},
+		func(ctx context.Context, evs []*events.DSPCallAuctionEvent) error {
+			var rows []*analytics.DSPCallEvent
+			for _, ev := range evs {
+				rows = append(rows, dspCallRowsFromAuction(ev)...)
+			}
+			if len(rows) == 0 {
+				return nil
+			}
+			return c.batch.InsertDSPCalls(ctx, rows)
+		},
+		nil,
+	)
+}
+
 func (c *EventConsumer) handleAudioBatch(ctx context.Context, msgs []*events.Message) error {
 	return batchProcess(ctx, c, msgs,
 		func(data []byte) (*analytics.MediaEvent, bool) {
@@ -749,6 +802,7 @@ func (c *EventConsumer) coreBatchHandlers() map[string]events.BatchHandler {
 		events.SubjectVideo:             c.handleVideoBatch,
 		events.SubjectAudio:             c.handleAudioBatch,
 		events.SubjectDSPCall:           c.handleDSPCallBatch,
+		events.SubjectDSPCallAuction:    c.handleDSPCallAuctionBatch,
 		// Profile-store tables (ADR 0006 phase 1): reporting consumes these off
 		// its OWN group (NATSGroupReporting, subscribed via SubscribeBatch in
 		// main.go) so BOTH reporting→ClickHouse and pipeline→lake receive every

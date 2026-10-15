@@ -110,6 +110,10 @@ subjects: Subjects {
     style.fill: "#1e3a5f"
     style.font-color: "#fff"
   }
+  dspcall: "adtech.optimise.dsp_call_auction\n(1 msg/auction, all legs)" {
+    style.fill: "#1e3a5f"
+    style.font-color: "#fff"
+  }
   budget: adtech.budget.depleted {
     style.fill: "#7c2d12"
     style.font-color: "#fff"
@@ -220,6 +224,7 @@ publishers.tracker -> subjects.view: viewability beacon
 
 publishers.exchange -> subjects.win: auction winner
 publishers.exchange -> subjects.complete: all bids + timing
+publishers.exchange -> subjects.dspcall: per-DSP leg telemetry {style.stroke-dash: 3}
 
 publishers.dsp -> subjects.budget: campaign exhausted
 publishers.dsp -> subjects.state: live/paused/ended
@@ -252,6 +257,7 @@ subjects.win -> consumers.dsp_consumer
 subjects.loss -> consumers.reporting: auction_losses (bid-shading loss view)
 subjects.shade -> consumers.reporting: auction_shades (bid-shading savings)
 subjects.complete -> consumers.reporting
+subjects.dspcall -> consumers.reporting: dsp_calls rows (router reseed, trace timeline) {style.stroke-dash: 3}
 subjects.budget -> consumers.reporting
 subjects.state -> consumers.reporting
 subjects.state -> consumers.webhooks
