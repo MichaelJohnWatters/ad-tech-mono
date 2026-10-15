@@ -135,7 +135,7 @@ func main() {
 		}
 		return d
 	}
-	httpClient := &http.Client{Timeout: backstop()}
+	httpClient := &http.Client{Timeout: backstop(), Transport: fanoutTransport(auctionDialCounter)}
 	sc.Manager.OnChange(keys.Exchange.BidTimeout.Key(), func(_, _, newVal string) {
 		httpClient.Timeout = backstop()
 		log.Info("bid timeout updated live", "new", newVal)
@@ -171,6 +171,7 @@ func main() {
 	// Auction-domain counters (adtech_auctions_total, revenue, …) emitted
 	// from the same /metrics endpoint as the generic HTTP metrics.
 	auctionM := newAuctionMetrics(metrics.Registry())
+	metrics.Registry().MustRegister(auctionDialCounter)
 
 	// Event spool: a failed NATS publish (deadline/stall/restart) is absorbed
 	// to disk and replayed on reconnect instead of silently dropped — the

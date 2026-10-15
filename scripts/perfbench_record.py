@@ -174,6 +174,10 @@ entry = {
     "jetstream_pending_max": query(f"max_over_time(sum(jetstream_consumer_num_pending)[{W}:15s])"),
     "jetstream_pending_end": query("sum(jetstream_consumer_num_pending)"),
     "jetstream_pending_top": by_label("topk(5, jetstream_consumer_num_pending)", "consumer_name"),
+    # New TCP dials/s from the exchange fan-out client (pool health: ~0 when
+    # connections are reused) + exchange CPU, the lever's direct readouts.
+    "exchange_dials_per_s": query(f"sum(rate(adtech_exchange_fanout_dials_total[{W}]))"),
+    "exchange_cpu_cores": query(f'sum(rate(container_cpu_usage_seconds_total{{pod=~"exchange-.*"}}[{W}]))'),
     "cluster_cpu_pct": query(f'100 * sum(rate(node_cpu_seconds_total{{mode!="idle"}}[{W}])) / count(node_cpu_seconds_total{{mode="idle"}})'),
     "irq_pct": query(f'100 * sum(rate(node_cpu_seconds_total{{mode=~"irq|softirq"}}[{W}])) / count(node_cpu_seconds_total{{mode="idle"}})'),
     "mem_avail_floor_gib": (lambda v: round(v / 2**30, 2) if v else None)(
