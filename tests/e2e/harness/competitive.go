@@ -242,3 +242,16 @@ func (h *Harness) SmartRouterPreview(t *testing.T) RouterPreview {
 	}
 	return rp
 }
+
+// ExchangeMetricsText returns one exchange pod's raw Prometheus /metrics
+// exposition (whichever replica the Service hands the request to).
+func (h *Harness) ExchangeMetricsText(t *testing.T) string {
+	t.Helper()
+	resp, err := h.getWithRetry(h.URLs.Exchange + routes.Metrics)
+	if err != nil {
+		t.Fatalf("exchange /metrics after retries: %v", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	return string(body)
+}

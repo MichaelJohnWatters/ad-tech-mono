@@ -66,6 +66,7 @@ func main() {
 	tmaxMarginFn = config.NewLiveDuration(sc.Manager, sc.Cfg, keys.Exchange.TMaxMargin.Key(), keys.Exchange.TMaxMargin.Default()).Value
 	channelTimeoutsRawFn = func() string { return keys.Exchange.BidTimeoutByChannel.Get(cfg) }
 	dspCallPerAuctionFn = func() bool { return keys.Exchange.DSPCallPerAuction.Get(cfg) }
+	shadowProbeFn = func() bool { return keys.Exchange.RoutingShadowProbe.Get(cfg) }
 	port := keys.Exchange.Port.Get(cfg)
 	// dspEndpointsFn reads the in-memory config map per auction (cheap;
 	// it's a sync.RWMutex-guarded map lookup, not a Postgres query). The
@@ -567,14 +568,20 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 		// or timeout patterns drop a DSP for this auction — except on the
 		// deterministic ε-probe slice (exchange.routing_explore_pct), which
 		// keeps a skipped DSP's stats flowing so it can earn its way back.
+		// With exchange.routing_shadow_probe the probe legs ride at the back
+		// as nProbe "shadow" legs the auction doesn't wait on.
 		dspEndpoints := dspEndpointsFn()
-		selectedEndpoints := router.SelectDSPsForTrace(routingChannel, dspEndpoints, traceID)
-		if len(selectedEndpoints) == 0 {
+		selectedEndpoints, probeEndpoints := router.SelectDSPsWithProbes(routingChannel, dspEndpoints, traceID)
+		nProbe := 0
+		if len(selectedEndpoints) == 0 && len(probeEndpoints) == 0 {
 			// Safety floor: if the router would skip everyone (cold start edge
 			// case or learned-bad state), fall back to the full list. We never
 			// want to silently no-bid because of routing.
 			selectedEndpoints = dspEndpoints
+		} else if len(selectedEndpoints) > 0 && shadowProbeFn() {
+			nProbe = len(probeEndpoints)
 		}
+		selectedEndpoints = append(selectedEndpoints, probeEndpoints...)
 
 		obsPhase("routing")
 		reqLog.Info("auction started", "channel", routingChannel, "num_dsps_total", len(dspEndpoints), "num_dsps_called", len(selectedEndpoints))
@@ -617,7 +624,7 @@ func auctionHandler(log *slog.Logger, clk clock.Clock, engine *auction.Engine, c
 			slowDSPs = parseSlowDSPs(r.Header.Get("X-Dev-Slow-DSPs"))
 		}
 
-		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, bidReq, routingChannel, slowDSPs, reqLog, router, pub, traceID, emitDSPCallFn(traceID), am)
+		bids, bidRecords := fanOutToDSPs(fanCtx, client, selectedEndpoints, nProbe, bidReq, routingChannel, slowDSPs, reqLog, router, pub, traceID, emitDSPCallFn(traceID), am)
 		fanSpan.SetAttributes(attribute.Int("bids.received", len(bids)))
 		fanSpan.End()
 		obsPhase("fanout")
@@ -1353,7 +1360,7 @@ func parseSlowDSPs(csv string) map[int]bool {
 	return out
 }
 
-func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, bidReq openrtb.BidRequest, channel string, slowDSPs map[int]bool, log *slog.Logger, router *optimise.SmartRouter, pub *events.Publisher, traceID string, emit bool, am *auctionMetrics) ([]auction.Bid, []dspBidRecord) {
+func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, nProbe int, bidReq openrtb.BidRequest, channel string, slowDSPs map[int]bool, log *slog.Logger, router *optimise.SmartRouter, pub *events.Publisher, traceID string, emit bool, am *auctionMetrics) ([]auction.Bid, []dspBidRecord) {
 	type dspResult struct {
 		dspID       string
 		endpoint    string
@@ -1374,27 +1381,45 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 	// detached context so the publish survives the handler returning.
 	emitEvents := emit && pub != nil
 	var callEvents []events.DSPCallEvent
-	if emitEvents {
-		defer func() {
-			if len(callEvents) == 0 {
-				return
+	publishCalls := func(pctx context.Context, evs []events.DSPCallEvent) {
+		if len(evs) == 0 {
+			return
+		}
+		if dspCallPerAuctionFn() {
+			// One message per auction (all legs) — see SubjectDSPCallAuction.
+			// Late shadow probes go out as their own (smaller) envelope.
+			if env, ok := events.DSPCallAuctionFromLegs(evs, time.Now()); ok {
+				go func() { _ = pub.DSPCallAuction(pctx, env) }()
 			}
-			evs := callEvents
-			pctx := context.WithoutCancel(ctx)
-			if dspCallPerAuctionFn() {
-				// One message per auction (all legs) — see SubjectDSPCallAuction.
-				if env, ok := events.DSPCallAuctionFromLegs(evs, time.Now()); ok {
-					go func() { _ = pub.DSPCallAuction(pctx, env) }()
-				}
-				return
+			return
+		}
+		go func() {
+			for i := range evs {
+				_ = pub.DSPCall(pctx, evs[i])
 			}
-			go func() {
-				for i := range evs {
-					_ = pub.DSPCall(pctx, evs[i])
-				}
-			}()
 		}()
 	}
+	if emitEvents {
+		defer func() { publishCalls(context.WithoutCancel(ctx), callEvents) }()
+	}
+
+	// Shadow probes: the trailing nProbe endpoints are ε-probe legs the
+	// auction must not wait on. They run on a context detached from the
+	// request (the handler returning must not cancel them — that would
+	// record a fake early timeout against the probed DSP) but keep the
+	// fan-out's deadline, so they're judged on the same budget as before.
+	probeCtx, probeCancel := ctx, context.CancelFunc(func() {})
+	probeEPs := make(map[string]struct{}, nProbe)
+	if nProbe > 0 {
+		probeCtx = context.WithoutCancel(ctx)
+		if dl, ok := ctx.Deadline(); ok {
+			probeCtx, probeCancel = context.WithDeadline(probeCtx, dl)
+		}
+		for _, ep := range endpoints[len(endpoints)-nProbe:] {
+			probeEPs[strings.TrimSpace(ep)] = struct{}{}
+		}
+	}
+	required := len(endpoints) - nProbe
 
 	// One encode per auction, shared read-only by every leg (it was encoded
 	// per DSP inside each goroutine — identical bytes, N× the work).
@@ -1404,6 +1429,10 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 		endpoint := strings.TrimSpace(endpoint)
 		i := i // capture for goroutine
 
+		legCtx := ctx
+		if i >= required {
+			legCtx = probeCtx
+		}
 		go func() {
 			var respBody []byte
 			var responseTime time.Duration
@@ -1412,15 +1441,15 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 				// demand we own is ever configured with a grpc:// endpoint —
 				// third-party DSPs always take the OpenRTB HTTP branch below.
 				// Same JSON, same bid handler on the far side; the client
-				// *http.Client timeout is mirrored as a ctx deadline.
+				// *http.Client timeout is mirrored as a legCtx deadline.
 				var hdrs map[string]string
 				if slowDSPs[i] {
 					hdrs = map[string]string{"X-Dev-Delay-Ms": "150"}
 				}
-				cctx := ctx
+				cctx := legCtx
 				if client.Timeout > 0 {
 					var cancel context.CancelFunc
-					cctx, cancel = context.WithTimeout(ctx, client.Timeout)
+					cctx, cancel = context.WithTimeout(legCtx, client.Timeout)
 					defer cancel()
 				}
 				start := time.Now()
@@ -1433,7 +1462,7 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 				}
 				respBody = rb
 			} else {
-				req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+				req, err := http.NewRequestWithContext(legCtx, http.MethodPost,
 					endpoint+routes.OpenRTBBid, bytes.NewReader(body))
 				if err != nil {
 					ch <- dspResult{dspID: dspID, endpoint: endpoint, err: err}
@@ -1442,7 +1471,7 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 				req.Header.Set(constants.HeaderContentType, constants.ContentTypeJSON)
 				// Inject the W3C trace context so the DSP-side server span
 				// becomes a child of this fanout span in Jaeger.
-				tracing.InjectHTTP(ctx, req)
+				tracing.InjectHTTP(legCtx, req)
 				// Dev-mode: if the inbound auction request flagged this DSP
 				// index as "slow," tell the DSP to add artificial latency.
 				// DSP gates the header on debug.endpoints_enabled.
@@ -1456,7 +1485,7 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 				if err != nil {
 					// Distinguish timeouts from other failures so the router
 					// can penalise high-timeout DSPs specifically.
-					timedOut := ctx.Err() != nil || strings.Contains(err.Error(), "deadline")
+					timedOut := legCtx.Err() != nil || strings.Contains(err.Error(), "deadline")
 					ch <- dspResult{dspID: dspID, endpoint: endpoint, err: err, latency: responseTime, timedOut: timedOut}
 					return
 				}
@@ -1534,11 +1563,96 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 		}()
 	}
 
+	isProbe := func(ep string) bool { _, ok := probeEPs[ep]; return ok }
+
 	var allBids []auction.Bid
 	var allRecords []dspBidRecord
-	received := 0
 	fanoutStart := time.Now()
 	reported := make(map[string]bool, len(endpoints))
+	// record turns one leg's result into router stats + metrics + its
+	// telemetry event. Shared by the auction's gather loop and the detached
+	// shadow-probe collector.
+	record := func(result dspResult) events.DSPCallEvent {
+		// Endpoint URL is the stable key for routing stats (DSP indexes
+		// can shift if config changes, URLs don't).
+		reported[result.endpoint] = true
+		bidReceived := len(result.bids) > 0
+		router.RecordCall(channel, result.endpoint, bidReceived, result.topBid, result.latency, result.timedOut)
+		// Prometheus mirror of the router's per-DSP view. This counter was
+		// registered (and charted by "Bids / Wins / No-bids by DSP") but
+		// never incremented — the panel showed wins only. "error" is a
+		// third decision the panel can add: transport failure/deadline,
+		// distinct from an explicit no-bid.
+		if am != nil {
+			decision := "no_bid"
+			switch {
+			case result.err != nil:
+				decision = "error"
+			case bidReceived:
+				decision = "bid"
+			}
+			am.bidsReceivedTotal.WithLabelValues(result.endpoint, decision).Inc()
+			outcome := decision
+			if result.err != nil && result.timedOut {
+				outcome = "timeout"
+			}
+			am.dspLegDuration.WithLabelValues(result.endpoint, channel, outcome).Observe(result.latency.Seconds())
+		}
+		if result.err != nil {
+			log.Warn("dsp call failed", "dsp", result.dspID, "endpoint", result.endpoint, "error", result.err)
+		}
+		return events.DSPCallEvent{
+			TraceID: traceID, AuctionID: traceID, Channel: channel,
+			DSPEndpoint: result.endpoint, BidReceived: bidReceived,
+			BidPriceUSD: result.topBid, LatencyMs: result.latency.Milliseconds(),
+			TimedOut: result.timedOut, NoBidReason: result.noBidReason, Timestamp: time.Now(),
+		}
+	}
+	// recordDeadline records a timeout for every listed leg still in flight
+	// at the fan-out deadline. Without this the router was BLIND to the
+	// worst offenders: a DSP slower than the whole fan-out deadline never
+	// got a RecordCall, so its timeout rate read 0 and MaxTimeoutRate could
+	// never skip it — every auction kept paying the full deadline for a DSP
+	// that never answers in time. (Caught by the slowpoke scenario DSP on
+	// its first run: 500ms±25% delay, timeout_rate stuck at 0.)
+	recordDeadline := func(eps []string, want func(string) bool) []events.DSPCallEvent {
+		var evs []events.DSPCallEvent
+		elapsed := time.Since(fanoutStart)
+		for _, ep := range eps {
+			ep = strings.TrimSpace(ep)
+			if reported[ep] || !want(ep) {
+				continue
+			}
+			// Latency truth for every unreported leg, warm-up or not —
+			// the router's cold-start grace is a routing decision, not
+			// an observability one.
+			if am != nil {
+				am.dspLegDuration.WithLabelValues(ep, channel, "timeout").Observe(elapsed.Seconds())
+				if isProbe(ep) {
+					am.shadowProbes.WithLabelValues(ep, "deadline").Inc()
+				}
+			}
+			// Cold-start grace lives in RecordFanoutDeadline: a leg
+			// inside its MinCalls warm-up records nothing (locally OR as
+			// telemetry — the CH rows feed the reseed, so an emitted
+			// event would re-poison what the grace just protected).
+			if !router.RecordFanoutDeadline(channel, ep, elapsed) {
+				continue
+			}
+			if am != nil {
+				am.bidsReceivedTotal.WithLabelValues(ep, "timeout").Inc()
+			}
+			evs = append(evs, events.DSPCallEvent{
+				TraceID: traceID, AuctionID: traceID, Channel: channel,
+				DSPEndpoint: ep, BidReceived: false,
+				LatencyMs: elapsed.Milliseconds(), TimedOut: true,
+				NoBidReason: "fanout_deadline", Timestamp: time.Now(),
+			})
+		}
+		return evs
+	}
+	notProbe := func(ep string) bool { return !isProbe(ep) }
+
 	// Early-finish: once the fan-out context deadline elapses, stop waiting
 	// for in-flight DSP goroutines. They'll be cancelled via ctx propagation
 	// and exit on their own (their channel sends become wasted writes into a
@@ -1546,93 +1660,77 @@ func fanOutToDSPs(ctx context.Context, client *http.Client, endpoints []string, 
 	// capacity = len(endpoints)). Without this, a single slow DSP whose
 	// HTTP call hasn't yet returned (despite ctx cancel) would force the
 	// auction to wait for it just to read its "timed out" result.
-	for received < len(endpoints) {
+	//
+	// Shadow probes (nProbe > 0) don't count toward "done": the auction
+	// closes once the ranked legs are in, and probe answers that beat that
+	// compete like any bid. Unreported probes are handed to collectProbes.
+	requiredIn := 0
+gather:
+	for requiredIn < required {
 		select {
 		case result := <-ch:
-			// Endpoint URL is the stable key for routing stats (DSP indexes
-			// can shift if config changes, URLs don't).
-			reported[result.endpoint] = true
-			bidReceived := len(result.bids) > 0
-			router.RecordCall(channel, result.endpoint, bidReceived, result.topBid, result.latency, result.timedOut)
-			// Prometheus mirror of the router's per-DSP view. This counter was
-			// registered (and charted by "Bids / Wins / No-bids by DSP") but
-			// never incremented — the panel showed wins only. "error" is a
-			// third decision the panel can add: transport failure/deadline,
-			// distinct from an explicit no-bid.
-			if am != nil {
-				decision := "no_bid"
-				switch {
-				case result.err != nil:
-					decision = "error"
-				case bidReceived:
-					decision = "bid"
-				}
-				am.bidsReceivedTotal.WithLabelValues(result.endpoint, decision).Inc()
-				outcome := decision
-				if result.err != nil && result.timedOut {
-					outcome = "timeout"
-				}
-				am.dspLegDuration.WithLabelValues(result.endpoint, channel, outcome).Observe(result.latency.Seconds())
-			}
+			ev := record(result)
 			if emitEvents {
-				callEvents = append(callEvents, events.DSPCallEvent{
-					TraceID: traceID, AuctionID: traceID, Channel: channel,
-					DSPEndpoint: result.endpoint, BidReceived: bidReceived,
-					BidPriceUSD: result.topBid, LatencyMs: result.latency.Milliseconds(),
-					TimedOut: result.timedOut, NoBidReason: result.noBidReason, Timestamp: time.Now(),
-				})
+				callEvents = append(callEvents, ev)
 			}
-			if result.err != nil {
-				log.Warn("dsp call failed", "dsp", result.dspID, "endpoint", result.endpoint, "error", result.err)
-			} else {
+			if result.err == nil {
 				allBids = append(allBids, result.bids...)
 				allRecords = append(allRecords, result.records...)
 			}
-			received++
+			if isProbe(result.endpoint) {
+				if am != nil {
+					am.shadowProbes.WithLabelValues(result.endpoint, "in_auction").Inc()
+				}
+			} else {
+				requiredIn++
+			}
 		case <-ctx.Done():
 			log.Debug("fan-out deadline elapsed before all DSPs reported",
-				"received", received, "total", len(endpoints))
-			// Record a timeout for every leg still in flight. Without this
-			// the router was BLIND to the worst offenders: a DSP slower than
-			// the whole fan-out deadline never got a RecordCall, so its
-			// timeout rate read 0 and MaxTimeoutRate could never skip it —
-			// every auction kept paying the full deadline for a DSP that
-			// never answers in time. (Caught by the slowpoke scenario DSP on
-			// its first run: 500ms±25% delay, timeout_rate stuck at 0.)
-			elapsed := time.Since(fanoutStart)
-			for _, ep := range endpoints {
-				ep = strings.TrimSpace(ep)
-				if reported[ep] {
-					continue
-				}
-				// Latency truth for every unreported leg, warm-up or not —
-				// the router's cold-start grace is a routing decision, not
-				// an observability one.
-				if am != nil {
-					am.dspLegDuration.WithLabelValues(ep, channel, "timeout").Observe(elapsed.Seconds())
-				}
-				// Cold-start grace lives in RecordFanoutDeadline: a leg
-				// inside its MinCalls warm-up records nothing (locally OR as
-				// telemetry — the CH rows feed the reseed, so an emitted
-				// event would re-poison what the grace just protected).
-				if !router.RecordFanoutDeadline(channel, ep, elapsed) {
-					continue
-				}
-				if am != nil {
-					am.bidsReceivedTotal.WithLabelValues(ep, "timeout").Inc()
-				}
-				if emitEvents {
-					callEvents = append(callEvents, events.DSPCallEvent{
-						TraceID: traceID, AuctionID: traceID, Channel: channel,
-						DSPEndpoint: ep, BidReceived: false,
-						LatencyMs: elapsed.Milliseconds(), TimedOut: true,
-						NoBidReason: "fanout_deadline", Timestamp: time.Now(),
-					})
-				}
+				"received", len(reported), "total", len(endpoints))
+			evs := recordDeadline(endpoints, notProbe)
+			if emitEvents {
+				callEvents = append(callEvents, evs...)
 			}
-			return allBids, allRecords
+			break gather
 		}
 	}
+
+	pendingProbes := 0
+	for _, ep := range endpoints[required:] {
+		if !reported[strings.TrimSpace(ep)] {
+			pendingProbes++
+		}
+	}
+	if pendingProbes == 0 {
+		probeCancel()
+		return allBids, allRecords
+	}
+	// Detached collector: the auction is done with these legs, but their
+	// outcome still feeds the router (that's the whole point of probing).
+	// It owns reported/record from here — the gather loop has returned.
+	go func() {
+		defer probeCancel()
+		var evs []events.DSPCallEvent
+		for pendingProbes > 0 {
+			select {
+			case result := <-ch:
+				if !isProbe(result.endpoint) || reported[result.endpoint] {
+					continue // a ranked leg that lost the deadline race
+				}
+				evs = append(evs, record(result))
+				if am != nil {
+					am.shadowProbes.WithLabelValues(result.endpoint, "late").Inc()
+				}
+				pendingProbes--
+			case <-probeCtx.Done():
+				evs = append(evs, recordDeadline(endpoints[required:], isProbe)...)
+				pendingProbes = 0
+			}
+		}
+		if emitEvents {
+			publishCalls(context.WithoutCancel(ctx), evs)
+		}
+	}()
 	return allBids, allRecords
 }
 

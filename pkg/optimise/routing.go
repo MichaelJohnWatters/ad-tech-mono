@@ -60,10 +60,10 @@ func DefaultKnobs() Knobs {
 		// 200 -> 186, fill flat. Cost: a recovered DSP is re-measured ~5x more
 		// slowly (rehab minutes -> tens of minutes). A non-blocking "shadow"
 		// probe would keep both — see handoff 08.
-		ExplorePct:     0.2,
-		LatencySoft:    50 * time.Millisecond,
-		LatencyHard:    80 * time.Millisecond,
-		RecencyWindow:  200,
+		ExplorePct:    0.2,
+		LatencySoft:   50 * time.Millisecond,
+		LatencyHard:   80 * time.Millisecond,
+		RecencyWindow: 200,
 	}
 }
 
@@ -273,7 +273,8 @@ func (r *SmartRouter) RecordWin(channel, dspID string) {
 //
 // Knobs.Enabled=false bypasses everything and returns the input unchanged.
 func (r *SmartRouter) SelectDSPs(channel string, allDSPs []string) []string {
-	return r.selectDSPs(channel, allDSPs, "")
+	ranked, _ := r.selectDSPs(channel, allDSPs, "")
+	return ranked
 }
 
 // SelectDSPsForTrace is SelectDSPs plus the ε-probe: a skip-filtered DSP is
@@ -283,15 +284,24 @@ func (r *SmartRouter) SelectDSPs(channel string, allDSPs []string) []string {
 // so it can earn its way back in when it recovers — without it, a skip is
 // a lifetime sentence for the pod.
 func (r *SmartRouter) SelectDSPsForTrace(channel string, allDSPs []string, traceID string) []string {
+	ranked, probes := r.selectDSPs(channel, allDSPs, traceID)
+	return append(ranked, probes...)
+}
+
+// SelectDSPsWithProbes is SelectDSPsForTrace with the ε-probe slice returned
+// separately, so the caller can run probe legs without letting them hold the
+// auction (a probed DSP is skip-filtered — usually because it's slow — so
+// waiting on it re-buys exactly the tail the skip removed).
+func (r *SmartRouter) SelectDSPsWithProbes(channel string, allDSPs []string, traceID string) (ranked, probes []string) {
 	return r.selectDSPs(channel, allDSPs, traceID)
 }
 
-func (r *SmartRouter) selectDSPs(channel string, allDSPs []string, traceID string) []string {
+func (r *SmartRouter) selectDSPs(channel string, allDSPs []string, traceID string) ([]string, []string) {
 	k := r.currentKnobs()
 	if !k.Enabled {
 		out := make([]string, len(allDSPs))
 		copy(out, allDSPs)
-		return out
+		return out, nil
 	}
 
 	r.mu.RLock()
@@ -348,7 +358,7 @@ func (r *SmartRouter) selectDSPs(channel string, allDSPs []string, traceID strin
 		result = append(result, c.id)
 	}
 	// Explore probes ride at the back: they're being measured, not trusted.
-	return append(result, explored...)
+	return result, explored
 }
 
 // exploreTrace deterministically decides whether this (trace, dsp) pair is

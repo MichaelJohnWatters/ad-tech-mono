@@ -64,6 +64,12 @@ type auctionMetrics struct {
 	// visible live; pair with dspLegDuration{outcome="timeout"} for the
 	// deadline-vs-timeouts trade-off.
 	fanoutDeadline *prometheus.HistogramVec
+
+	// ε-probe legs under exchange.routing_shadow_probe, by where they
+	// landed: in_auction = answered before the ranked legs finished (bids
+	// competed), late = answered after the auction closed (stats only),
+	// deadline = still in flight at the original fan-out deadline.
+	shadowProbes *prometheus.CounterVec
 }
 
 func newAuctionMetrics(reg *prometheus.Registry) *auctionMetrics {
@@ -106,12 +112,17 @@ func newAuctionMetrics(reg *prometheus.Registry) *auctionMetrics {
 			Help:      "Effective per-auction DSP fan-out deadline by channel (per-channel override else bid_timeout, capped by tmax - tmax_margin).",
 			Buckets:   []float64{.025, .05, .075, .1, .15, .2, .25, .3, .4, .5, .6, .75, 1},
 		}, []string{"channel"}),
+		shadowProbes: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Namespace: "adtech",
+			Name:      "exchange_shadow_probe_total",
+			Help:      "Non-blocking ε-probe legs by outcome: in_auction (answered in time to compete) | late (recorded after the auction closed) | deadline (in flight at the fan-out deadline).",
+		}, []string{"dsp_endpoint", "outcome"}),
 		auctionsWonTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "adtech",
 			Name:      "auctions_won_total",
 			Help:      "Auctions won per DSP endpoint. Paired with bids_received_total to chart bid/win/loss by DSP.",
 		}, []string{"dsp_endpoint"}),
 	}
-	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal, m.auctionsWonTotal, m.phaseDuration, m.dspLegDuration, m.fanoutDeadline)
+	reg.MustRegister(m.auctionsTotal, m.bidsReceivedTotal, m.clearingPriceUSDTotal, m.bidsBelowFloorTotal, m.auctionsWonTotal, m.phaseDuration, m.dspLegDuration, m.fanoutDeadline, m.shadowProbes)
 	return m
 }

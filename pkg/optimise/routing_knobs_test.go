@@ -215,3 +215,25 @@ func TestSmartRouterFanoutDeadlineColdStartGrace(t *testing.T) {
 		t.Fatal("warm DSP with chronic deadline breaches must be skipped")
 	}
 }
+
+// SelectDSPsWithProbes hands the ε-probe slice back separately (so the
+// exchange can run it as non-blocking shadow legs); SelectDSPsForTrace is
+// exactly ranked + probes.
+func TestSmartRouterSelectWithProbesSplit(t *testing.T) {
+	r := NewSmartRouter()
+	trainNoBids(r, "display", "dsp-bad", 30)
+	r.RecordCall("display", "dsp-good", true, 2.50, 5*time.Millisecond, false)
+	k := DefaultKnobs()
+	k.ExplorePct = 100
+	r.SetKnobs(func() Knobs { return k })
+	all := []string{"dsp-bad", "dsp-good"}
+
+	ranked, probes := r.SelectDSPsWithProbes("display", all, "trace-1")
+	if contains(ranked, "dsp-bad") || len(probes) != 1 || probes[0] != "dsp-bad" {
+		t.Fatalf("ranked=%v probes=%v, want the skipped DSP only in probes", ranked, probes)
+	}
+	joined := r.SelectDSPsForTrace("display", all, "trace-1")
+	if len(joined) != len(ranked)+len(probes) || joined[len(joined)-1] != "dsp-bad" {
+		t.Fatalf("SelectDSPsForTrace=%v, want ranked+probes", joined)
+	}
+}
