@@ -125,7 +125,7 @@ slowpoke (500ms delay → timeout-skipped after warm-up), competitor2 =
 deadbeat (99% no-bid → bid-rate-skipped), competitor3 = healthy market
 maker (:8098), competitor4 = COINFLIP (:8100, bids ~50% — mediocre but must
 NEVER be skipped; if it is, a skip-rule regression shipped). Expect
-dsp_calls to show comp1/comp2 at the ~1% ε-probe trickle and comp3/comp4 at
+dsp_calls to show comp1/comp2 at the ~0.2% ε-probe trickle (exchange.routing_explore_pct default 0.2 since 2026-10-15; was 1%) and comp3/comp4 at
 full volume. GOLDEN BASELINE: pinned in docs/perf/BASELINE (8af405c6, 2026-10-15,
 110rps/30m — fill 95.4%, fanout p50/p95 46.6/223ms, SSP auction p95 243,
 DSP audience p50/p95 4.8/47, sched p99 9.1ms, VERIFY GREEN); perfbench

@@ -54,7 +54,13 @@ func DefaultKnobs() Knobs {
 		MinCalls:       20,
 		MinBidRate:     0.05,
 		MaxTimeoutRate: 0.50,
-		ExplorePct:     1,
+		// 0.2, not 1 (2026-10-15 A/B @110rps): probe auctions wait the full
+		// deadline on the skipped slow DSP, and at 1% they were a big share of
+		// the fanout tail — 0.2% cut fanout p95 133 -> 109ms, SSP auction p95
+		// 200 -> 186, fill flat. Cost: a recovered DSP is re-measured ~5x more
+		// slowly (rehab minutes -> tens of minutes). A non-blocking "shadow"
+		// probe would keep both — see handoff 08.
+		ExplorePct:     0.2,
 		LatencySoft:    50 * time.Millisecond,
 		LatencyHard:    80 * time.Millisecond,
 		RecencyWindow:  200,
